@@ -10,5 +10,6 @@ async def health():
     return {
         "status": "ok",
         "service": "reachai-api",
+        "version": "fbdf649+debug",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
