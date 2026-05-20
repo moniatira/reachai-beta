@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
-from app.api import calendly_oauth, chat, debug, health, widget, workspaces
+from app.api import calendly_oauth, chat, debug, health, version, widget, workspaces
 from app.core.config import get_settings
 
 
@@ -54,6 +54,7 @@ app.include_router(calendly_oauth.router)
 app.include_router(chat.router)
 app.include_router(widget.router)
 app.include_router(debug.router)
+app.include_router(version.router)
 
 
 @app.get("/v1/ping")
