@@ -56,6 +56,19 @@ app.include_router(widget.router)
 app.include_router(debug.router)
 
 
+@app.get("/v1/ping")
+async def ping():
+    import os
+    from app.core.config import get_settings
+    s = get_settings()
+    return {
+        "calendly_client_id_set": bool(s.calendly_client_id),
+        "calendly_redirect_uri": s.calendly_redirect_uri,
+        "env_CALENDLY_CLIENT_ID": os.environ.get("CALENDLY_CLIENT_ID", "NOT_SET"),
+        "env_CALENDLY_REDIRECT_URI": os.environ.get("CALENDLY_REDIRECT_URI", "NOT_SET"),
+    }
+
+
 @app.get("/")
 async def root():
     return {
