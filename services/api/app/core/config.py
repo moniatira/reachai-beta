@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     admin_api_key: str = "change-me-in-production"
     session_secret_key: str = "change-me-in-production"
 
-    allowed_origins: str = "http://localhost:3000,http://localhost:8000"
+    allowed_origins: str = "*"
 
     @property
     def cors_origins(self) -> list[str]:
