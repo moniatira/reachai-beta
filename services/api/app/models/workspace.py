@@ -78,6 +78,9 @@ class Workspace(Base):
     # NEW in Day 2.5 — structured business knowledge extracted from website
     extracted_business_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # NEW in Day 3 — which calendar provider is active for this workspace
+    primary_calendar_provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
