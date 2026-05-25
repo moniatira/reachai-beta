@@ -26,7 +26,7 @@ from app.services.calendar.base import (
     generate_time_grid,
     slots_overlap,
 )
-from app.services.encryption import decrypt_token, encrypt_token
+from app.core.security import decrypt_token, encrypt_token
 
 
 logger = logging.getLogger(__name__)
