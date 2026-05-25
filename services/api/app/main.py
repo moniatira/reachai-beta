@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
-from app.api import auth, calendly_oauth, chat, debug, health, onboarding, site_extract, version, widget, workspaces
+from app.api import auth, calendar_status, calendly_oauth, chat, debug, google_oauth, health, onboarding, outlook_oauth, site_extract, version, widget, workspaces
 from app.core.config import get_settings
 
 
@@ -53,6 +53,9 @@ app.include_router(workspaces.router)
 app.include_router(auth.router)
 app.include_router(onboarding.router)
 app.include_router(site_extract.router)
+app.include_router(google_oauth.router)
+app.include_router(outlook_oauth.router)
+app.include_router(calendar_status.router)
 app.include_router(calendly_oauth.router)
 app.include_router(chat.router)
 app.include_router(widget.router)

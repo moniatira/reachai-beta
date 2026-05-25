@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     magic_link_base_url: str = "http://localhost:8000/v1/auth/verify-link"
     app_base_url: str = "http://localhost:8000"
 
+    # Google Calendar OAuth (Day 3)
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/v1/google/callback"
+
+    # Outlook / Microsoft Graph OAuth (Day 3)
+    outlook_client_id: str = ""
+    outlook_client_secret: str = ""
+    outlook_redirect_uri: str = "http://localhost:8000/v1/outlook/callback"
+    outlook_tenant_id: str = "common"
+
 
     @property
     def cors_origins(self) -> list[str]:
