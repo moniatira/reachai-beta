@@ -137,7 +137,7 @@ class OutlookCalendarProvider(CalendarProvider):
     async def list_services(self) -> list[CalendarService]:
         """Outlook has no built-in services concept — return SMB-configured
         services or a default 30-min consultation."""
-        configured = self.connection.metadata.get("services") if self.connection.metadata else None
+        configured = self.connection.connection_metadata.get("services") if self.connection.connection_metadata else None
         if configured:
             return [CalendarService(**s) for s in configured]
 

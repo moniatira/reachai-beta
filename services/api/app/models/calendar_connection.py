@@ -54,7 +54,7 @@ class CalendarConnection(Base):
     # For Calendly: user_uri; for Google: numeric ID; for Outlook: Graph object ID
 
     # Provider-specific config (calendar IDs, services list, prefs)
-    metadata: Mapped[dict | None] = mapped_column("provider_metadata", JSON, nullable=True)
+    connection_metadata: Mapped[dict | None] = mapped_column("provider_metadata", JSON, nullable=True)
 
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

@@ -175,7 +175,7 @@ async def google_callback(
             expires_at=expires_at,
             account_email=account_email,
             account_id=account_id,
-            metadata={"calendar_ids": ["primary"]},
+            connection_metadata={"calendar_ids": ["primary"]},
             active=True,
         )
         db.add(new_conn)

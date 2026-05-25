@@ -177,7 +177,7 @@ async def outlook_callback(
             expires_at=expires_at,
             account_email=account_email,
             account_id=account_id,
-            metadata={},
+            connection_metadata={},
             active=True,
         )
         db.add(new_conn)

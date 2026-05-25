@@ -115,7 +115,7 @@ class GoogleCalendarProvider(CalendarProvider):
         For Day 3, we use a sensible default: one 30-min consultation.
         Day 6+ adds a UI for SMBs to configure their own services.
         """
-        configured = self.connection.metadata.get("services") if self.connection.metadata else None
+        configured = self.connection.connection_metadata.get("services") if self.connection.connection_metadata else None
         if configured:
             return [CalendarService(**s) for s in configured]
 
@@ -144,7 +144,7 @@ class GoogleCalendarProvider(CalendarProvider):
         service = next((s for s in services if s.id == service_id), services[0])
 
         # Get list of calendars to check busy times against
-        calendar_ids = self.connection.metadata.get("calendar_ids", ["primary"]) if self.connection.metadata else ["primary"]
+        calendar_ids = self.connection.connection_metadata.get("calendar_ids", ["primary"]) if self.connection.connection_metadata else ["primary"]
 
         try:
             cal_service = self._calendar_service()
