@@ -1,3 +1,4 @@
+# Existing dependencies (unchanged)
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
 sqlalchemy[asyncio]==2.0.36
@@ -11,3 +12,6 @@ anthropic==0.39.0
 python-multipart==0.0.12
 cryptography==43.0.3
 itsdangerous==2.2.0
+
+# NEW for Day 1 — self-serve auth
+PyJWT==2.9.0

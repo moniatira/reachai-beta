@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     session_secret_key: str = "change-me-in-production"
 
     allowed_origins: str = "*"
+    # Email (Resend)
+    resend_api_key: str = ""
+    from_email: str = "ReachAI <onboarding@resend.dev>"
+
+    # Auth / sessions
+    jwt_secret: str = "change-me-in-production"
+    magic_link_base_url: str = "http://localhost:8000/v1/auth/verify-link"
+    app_base_url: str = "http://localhost:8000"
+
 
     @property
     def cors_origins(self) -> list[str]:
