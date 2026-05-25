@@ -1,4 +1,9 @@
-"""SQLAlchemy ORM models for the ReachAI beta."""
+"""SQLAlchemy ORM models for the ReachAI beta — Day 2 update.
+
+Adds:
+  - owner_user_id, onboarding_step, trial_status, trial_ends_at on Workspace
+  - WorkspaceOwner: explicit user→workspace mapping (future team roles)
+"""
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
@@ -10,6 +15,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,8 +30,34 @@ def uuid_str() -> str:
     return str(uuid.uuid4())
 
 
+# Valid trial_status values:
+#   pending     — workspace created but onboarding not finished
+#   trial       — onboarding complete, in 14-day free trial
+#   active      — past trial, paid subscription active
+#   past_due    — payment failed
+#   canceled    — user canceled subscription
+PENDING = "pending"
+TRIAL = "trial"
+ACTIVE = "active"
+PAST_DUE = "past_due"
+CANCELED = "canceled"
+
+
+# Valid onboarding_step values:
+#   not_started   — fresh workspace
+#   business      — business info saved
+#   calendar      — calendar connected
+#   assistant     — assistant settings saved
+#   complete      — ready to trial / activate
+NOT_STARTED = "not_started"
+BUSINESS = "business"
+CALENDAR = "calendar"
+ASSISTANT = "assistant"
+COMPLETE = "complete"
+
+
 class Workspace(Base):
-    """An SMB tenant. Slug appears in the embed code: data-workspace='acme-salon'."""
+    """An SMB tenant."""
 
     __tablename__ = "workspaces"
 
@@ -33,7 +65,13 @@ class Workspace(Base):
     slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
     industry: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    website_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     owner_email: Mapped[str] = mapped_column(String(200))
+
+    # NEW in Day 2 — primary owner pointer (denormalized for fast lookup)
+    owner_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     assistant_name: Mapped[str] = mapped_column(String(80), default="Sarah")
     greeting: Mapped[str] = mapped_column(
@@ -47,6 +85,11 @@ class Workspace(Base):
 
     whitelisted: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # NEW in Day 2 — onboarding + trial state
+    onboarding_step: Mapped[str] = mapped_column(String(20), default=NOT_STARTED)
+    trial_status: Mapped[str] = mapped_column(String(20), default=PENDING)
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -62,6 +105,32 @@ class Workspace(Base):
     bookings: Mapped[list["Booking"]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"
     )
+    owners: Mapped[list["WorkspaceOwner"]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+
+
+class WorkspaceOwner(Base):
+    """Many-to-many bridge: users to workspaces, with a role.
+
+    Day 2 only ever sets role=owner. Day 7+ will allow admin/viewer for teams.
+    """
+
+    __tablename__ = "workspace_owners"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20), default="owner")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    workspace: Mapped[Workspace] = relationship(back_populates="owners")
+
+    __table_args__ = (UniqueConstraint("user_id", "workspace_id", name="uq_owner_user_workspace"),)
 
 
 class CalendlyToken(Base):
@@ -91,7 +160,7 @@ class CalendlyToken(Base):
 
 
 class ChatSession(Base):
-    """A single chat conversation. Messages stored as JSON list."""
+    """A single chat conversation."""
 
     __tablename__ = "chat_sessions"
 
