@@ -22,7 +22,7 @@ from app.core.db import get_db
 from app.models import Workspace
 from app.models.calendar_connection import CalendarConnection
 from app.services.calendar.google_provider import GOOGLE_AUTH_URL, GOOGLE_SCOPES, GOOGLE_TOKEN_URL
-from app.services.encryption import encrypt_token
+from app.core.security import encrypt_token
 
 
 logger = logging.getLogger(__name__)

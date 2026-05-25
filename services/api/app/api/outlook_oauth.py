@@ -22,7 +22,7 @@ from app.core.db import get_db
 from app.models import Workspace
 from app.models.calendar_connection import CalendarConnection
 from app.services.calendar.outlook_provider import OUTLOOK_SCOPES, OUTLOOK_TOKEN_URL_TEMPLATE
-from app.services.encryption import encrypt_token
+from app.core.security import encrypt_token
 
 
 logger = logging.getLogger(__name__)
