@@ -1,8 +1,7 @@
-"""SQLAlchemy ORM models for the ReachAI beta — Day 2 update.
+"""SQLAlchemy ORM models for the ReachAI beta — Day 2.5 update.
 
-Adds:
-  - owner_user_id, onboarding_step, trial_status, trial_ends_at on Workspace
-  - WorkspaceOwner: explicit user→workspace mapping (future team roles)
+Adds extracted_business_info JSON column for storing the structured
+business knowledge extracted from the SMB's website.
 """
 import uuid
 from datetime import datetime, timezone
@@ -30,25 +29,14 @@ def uuid_str() -> str:
     return str(uuid.uuid4())
 
 
-# Valid trial_status values:
-#   pending     — workspace created but onboarding not finished
-#   trial       — onboarding complete, in 14-day free trial
-#   active      — past trial, paid subscription active
-#   past_due    — payment failed
-#   canceled    — user canceled subscription
+# trial_status: pending | trial | active | past_due | canceled
 PENDING = "pending"
 TRIAL = "trial"
 ACTIVE = "active"
 PAST_DUE = "past_due"
 CANCELED = "canceled"
 
-
-# Valid onboarding_step values:
-#   not_started   — fresh workspace
-#   business      — business info saved
-#   calendar      — calendar connected
-#   assistant     — assistant settings saved
-#   complete      — ready to trial / activate
+# onboarding_step: not_started | business | calendar | assistant | complete
 NOT_STARTED = "not_started"
 BUSINESS = "business"
 CALENDAR = "calendar"
@@ -57,8 +45,6 @@ COMPLETE = "complete"
 
 
 class Workspace(Base):
-    """An SMB tenant."""
-
     __tablename__ = "workspaces"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
@@ -68,7 +54,6 @@ class Workspace(Base):
     website_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     owner_email: Mapped[str] = mapped_column(String(200))
 
-    # NEW in Day 2 — primary owner pointer (denormalized for fast lookup)
     owner_user_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -86,10 +71,12 @@ class Workspace(Base):
     whitelisted: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    # NEW in Day 2 — onboarding + trial state
     onboarding_step: Mapped[str] = mapped_column(String(20), default=NOT_STARTED)
     trial_status: Mapped[str] = mapped_column(String(20), default=PENDING)
     trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # NEW in Day 2.5 — structured business knowledge extracted from website
+    extracted_business_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -111,11 +98,6 @@ class Workspace(Base):
 
 
 class WorkspaceOwner(Base):
-    """Many-to-many bridge: users to workspaces, with a role.
-
-    Day 2 only ever sets role=owner. Day 7+ will allow admin/viewer for teams.
-    """
-
     __tablename__ = "workspace_owners"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
@@ -134,8 +116,6 @@ class WorkspaceOwner(Base):
 
 
 class CalendlyToken(Base):
-    """Encrypted Calendly OAuth tokens for a workspace."""
-
     __tablename__ = "calendly_tokens"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
@@ -160,8 +140,6 @@ class CalendlyToken(Base):
 
 
 class ChatSession(Base):
-    """A single chat conversation."""
-
     __tablename__ = "chat_sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
@@ -189,8 +167,6 @@ class ChatSession(Base):
 
 
 class Booking(Base):
-    """A confirmed booking that landed on the SMB's Calendly."""
-
     __tablename__ = "bookings"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
