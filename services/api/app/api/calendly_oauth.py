@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.models import Workspace
+from app.models.calendar_connection import CalendarConnection
 from app.services.calendly import (
     CalendlyError,
     build_authorize_url,
@@ -19,11 +20,11 @@ router = APIRouter(prefix="/v1/calendly", tags=["calendly"])
 
 @router.get("/connect/{slug}")
 async def connect_redirect(slug: str, db: AsyncSession = Depends(get_db)):
-    """Convenience redirect to Calendly's OAuth authorize URL."""
+    """Redirect to Calendly's OAuth authorize URL."""
     result = await db.execute(select(Workspace).where(Workspace.slug == slug))
     workspace = result.scalar_one_or_none()
-    if not workspace or not workspace.whitelisted:
-        raise HTTPException(status_code=404, detail="Workspace not found or not whitelisted")
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
     from fastapi.responses import RedirectResponse
     return RedirectResponse(build_authorize_url(workspace.slug))
 
@@ -31,20 +32,53 @@ async def connect_redirect(slug: str, db: AsyncSession = Depends(get_db)):
 @router.get("/callback", response_class=HTMLResponse)
 async def oauth_callback(
     code: str = Query(...),
-    state: str = Query(..., description="The workspace slug we sent in the authorize URL"),
+    state: str = Query(..., description="The workspace slug sent in the authorize URL"),
     db: AsyncSession = Depends(get_db),
 ):
     """Calendly redirects here after the SMB authorizes ReachAI."""
     result = await db.execute(select(Workspace).where(Workspace.slug == state))
     workspace = result.scalar_one_or_none()
-    if not workspace or not workspace.whitelisted:
-        return HTMLResponse(_error_page("Workspace not found or not whitelisted."), status_code=404)
+    if not workspace:
+        return HTMLResponse(_error_page("Workspace not found."), status_code=404)
 
     await db.refresh(workspace, ["calendly_token"])
 
     try:
         token_response = await exchange_code_for_tokens(code)
-        await save_tokens(db, workspace, token_response)
+        calendly_token = await save_tokens(db, workspace, token_response)
+
+        # Mirror into calendar_connections so the wizard's polling endpoint detects it
+        conn_result = await db.execute(
+            select(CalendarConnection).where(
+                CalendarConnection.workspace_id == workspace.id,
+                CalendarConnection.provider == "calendly",
+            )
+        )
+        existing_conn = conn_result.scalar_one_or_none()
+
+        if existing_conn:
+            existing_conn.access_token_enc = calendly_token.access_token_enc
+            existing_conn.refresh_token_enc = calendly_token.refresh_token_enc
+            existing_conn.expires_at = calendly_token.expires_at
+            existing_conn.account_email = calendly_token.calendly_email
+            existing_conn.account_id = calendly_token.calendly_user_uri
+            existing_conn.active = True
+        else:
+            db.add(CalendarConnection(
+                workspace_id=workspace.id,
+                provider="calendly",
+                access_token_enc=calendly_token.access_token_enc,
+                refresh_token_enc=calendly_token.refresh_token_enc,
+                expires_at=calendly_token.expires_at,
+                account_email=calendly_token.calendly_email,
+                account_id=calendly_token.calendly_user_uri,
+                connection_metadata={"scheduling_url": calendly_token.scheduling_url},
+                active=True,
+            ))
+
+        if not workspace.primary_calendar_provider:
+            workspace.primary_calendar_provider = "calendly"
+
         await db.commit()
     except CalendlyError as e:
         return HTMLResponse(_error_page(f"Calendly error: {e}"), status_code=500)
@@ -71,10 +105,11 @@ p{{color:#5F5E5A;font-size:15px;line-height:1.6}}
 </style></head><body>
 <div class="card">
   <div class="check">✓</div>
-  <h1>You're connected, {name}.</h1>
-  <p>Your Calendly is now wired up. Check your email — we've sent your embed code and next steps.</p>
+  <h1>Calendly connected!</h1>
+  <p>{name} is now linked to your ReachAI workspace. This window will close automatically.</p>
   <div class="brand">R∙ ReachAI</div>
 </div>
+<script>setTimeout(function(){{window.close();}},1500);</script>
 </body></html>"""
 
 
