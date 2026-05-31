@@ -61,7 +61,11 @@ async def get_provider_for_workspace(
     return _instantiate(connection, settings)
 
 
-def _instantiate(connection: CalendarConnection, settings) -> CalendarProvider:
+def _instantiate(
+    connection: CalendarConnection,
+    settings,
+    db: AsyncSession | None = None,
+) -> CalendarProvider:
     """Build the right provider instance for this connection."""
     if connection.provider == "google":
         if not settings.google_client_id or not settings.google_client_secret:
@@ -83,7 +87,7 @@ def _instantiate(connection: CalendarConnection, settings) -> CalendarProvider:
         )
 
     if connection.provider == "calendly":
-        return CalendlyProvider(connection=connection)
+        return CalendlyProvider(connection=connection, db=db)
 
     raise CalendarProviderError(f"Unknown calendar provider: {connection.provider}")
 

@@ -87,7 +87,7 @@ async def calendar_status(
     summaries = []
     for conn in connections:
         try:
-            provider = _instantiate(conn, settings)
+            provider = _instantiate(conn, settings, db)
             healthy = await provider.health_check()
         except Exception as e:
             logger.warning("Health check failed for %s: %s", conn.provider, e)

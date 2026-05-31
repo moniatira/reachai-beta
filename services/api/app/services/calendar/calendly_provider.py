@@ -1,14 +1,11 @@
-"""Calendly provider wrapper — implements CalendarProvider interface.
-
-Wraps the existing Calendly service code (app/services/calendly.py) so it can
-be used through the same abstraction as Google/Outlook. No behavior change
-for existing Sambaluk/demo-salon customers.
-"""
+"""Calendly provider wrapper — implements CalendarProvider interface."""
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
+from app.core.security import decrypt_token, encrypt_token
 from app.models.calendar_connection import CalendarConnection
 from app.services.calendar.base import (
     BookingConfirmation,
@@ -18,8 +15,10 @@ from app.services.calendar.base import (
     CalendarService,
     CalendarSlot,
 )
-# Existing Calendly service module — kept in place
-from app.services import calendly as legacy_calendly
+from app.services.calendly import _api_get, refresh_access_token, CalendlyError
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 logger = logging.getLogger(__name__)
@@ -28,29 +27,53 @@ logger = logging.getLogger(__name__)
 class CalendlyProvider(CalendarProvider):
     PROVIDER_NAME = "calendly"
 
-    def __init__(self, connection: CalendarConnection):
+    def __init__(self, connection: CalendarConnection, db: "AsyncSession | None" = None):
         self.connection = connection
+        self._db = db
 
     @property
     def supports_video_conferencing(self) -> bool:
-        # Calendly supports video links but they're configured per event type
-        # in the Calendly UI — we don't control whether one is attached
         return True
 
     @property
     def supports_real_time_booking(self) -> bool:
-        # Calendly bookings require the customer to click a confirmation link
         return False
+
+    async def _get_access_token(self) -> str:
+        """Return a valid access token, refreshing from Calendly if expired."""
+        now = datetime.now(timezone.utc)
+        expires_at = self.connection.expires_at
+        if expires_at is not None and expires_at <= now:
+            raw_refresh = decrypt_token(self.connection.refresh_token_enc)
+            try:
+                refreshed = await refresh_access_token(raw_refresh)
+            except CalendlyError as e:
+                raise CalendarProviderError(f"Calendly token refresh failed: {e}")
+            self.connection.access_token_enc = encrypt_token(refreshed["access_token"])
+            self.connection.refresh_token_enc = encrypt_token(refreshed["refresh_token"])
+            self.connection.expires_at = now + timedelta(
+                seconds=refreshed.get("expires_in", 3600) - 60
+            )
+            if self._db:
+                await self._db.commit()
+        return decrypt_token(self.connection.access_token_enc)
 
     async def list_services(self) -> list[CalendarService]:
         """Calendly event types = our services."""
         try:
-            event_types = await legacy_calendly.list_event_types(self.connection)
+            access_token = await self._get_access_token()
+            user_uri = self.connection.account_id
+            data = await _api_get(
+                access_token, "/event_types",
+                params={"user": user_uri, "active": "true"},
+            )
+        except CalendarProviderError:
+            raise
         except Exception as e:
             raise CalendarProviderError(f"Calendly list_event_types failed: {e}")
 
         services = []
-        for et in event_types:
+        for et in data.get("collection", []):
             services.append(CalendarService(
                 id=et["uri"],
                 name=et["name"],
@@ -70,12 +93,18 @@ class CalendlyProvider(CalendarProvider):
     ) -> list[CalendarSlot]:
         """Use Calendly's availability API."""
         try:
-            availability = await legacy_calendly.fetch_event_type_availability(
-                self.connection,
-                event_type_uri=service_id,
-                start_time=date_range_start,
-                end_time=date_range_end,
+            access_token = await self._get_access_token()
+            data = await _api_get(
+                access_token,
+                "/event_type_available_times",
+                params={
+                    "event_type": service_id,
+                    "start_time": date_range_start.isoformat(),
+                    "end_time": date_range_end.isoformat(),
+                },
             )
+        except CalendarProviderError:
+            raise
         except Exception as e:
             raise CalendarProviderError(f"Calendly availability fetch failed: {e}")
 
@@ -84,7 +113,7 @@ class CalendlyProvider(CalendarProvider):
         duration = service.duration_minutes if service else 30
 
         slots = []
-        for window in availability.get("collection", [])[:max_slots]:
+        for window in data.get("collection", [])[:max_slots]:
             start_str = window.get("start_time")
             if not start_str:
                 continue
@@ -94,17 +123,17 @@ class CalendlyProvider(CalendarProvider):
                 end=start + timedelta(minutes=duration),
                 service_id=service_id,
                 provider_metadata={
-                    "scheduling_url": window.get("scheduling_url") or (service.booking_url if service else None),
+                    "scheduling_url": window.get("scheduling_url") or (
+                        service.booking_url if service else None
+                    ),
                 },
             ))
         return slots
 
     async def create_booking(self, request: BookingRequest) -> BookingConfirmation:
-        """Calendly doesn't allow direct booking via API — we return the
-        scheduling link so the customer clicks to confirm."""
+        """Calendly doesn't support direct API booking — return scheduling link."""
         scheduling_url = request.slot.provider_metadata.get("scheduling_url")
         if not scheduling_url:
-            # Fall back to building the URL from service metadata
             services = await self.list_services()
             service = next((s for s in services if s.id == request.service_id), None)
             scheduling_url = service.booking_url if service else None
@@ -112,7 +141,6 @@ class CalendlyProvider(CalendarProvider):
         if not scheduling_url:
             raise CalendarProviderError("No Calendly scheduling URL available")
 
-        # Calendly supports prefilling via URL params
         prefilled = (
             f"{scheduling_url}"
             f"?name={request.customer_name.replace(' ', '%20')}"
@@ -129,7 +157,12 @@ class CalendlyProvider(CalendarProvider):
 
     async def health_check(self) -> bool:
         try:
-            await legacy_calendly.list_event_types(self.connection)
+            access_token = await self._get_access_token()
+            user_uri = self.connection.account_id
+            await _api_get(
+                access_token, "/event_types",
+                params={"user": user_uri, "active": "true", "count": "1"},
+            )
             return True
         except Exception as e:
             logger.warning("Calendly health check failed: %s", e)
