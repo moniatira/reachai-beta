@@ -13,7 +13,7 @@ async def health():
     return {
         "status": "ok",
         "service": "reachai-api",
-        "version": "ce71517",
+        "version": os.environ.get("GIT_COMMIT", "7d91680"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "env_check": {
             "calendly_client_id_set": bool(s.calendly_client_id),
