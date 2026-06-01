@@ -6,9 +6,10 @@ Day 2 changes:
   - NEW: GET /v1/workspaces/me — list workspaces owned by current user
 """
 import re
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -16,7 +17,7 @@ from app.core.db import get_db
 from app.core.jwt_utils import get_current_user_optional
 from app.models import Workspace
 from app.models.user import User
-from app.models.workspace import BUSINESS, PENDING, WorkspaceOwner
+from app.models.workspace import BUSINESS, PENDING, WorkspaceOwner, ChatSession, Booking
 from app.services.calendly import build_authorize_url
 
 
@@ -218,3 +219,136 @@ async def get_workspace(
         onboarding_step=workspace.onboarding_step,
         trial_status=workspace.trial_status,
     )
+
+
+# ── Analytics ──────────────────────────────────────────────────────────────
+
+class AnalyticsResponse(BaseModel):
+    bookings_today: int
+    bookings_this_month: int
+    conversations_total: int
+    conversations_with_booking: int
+
+
+@router.get("/{slug}/analytics", response_model=AnalyticsResponse)
+async def get_workspace_analytics(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+    user_id: str | None = Depends(get_current_user_optional),
+):
+    settings = get_settings()
+    is_admin = x_admin_key and x_admin_key == settings.admin_api_key
+    result = await db.execute(select(Workspace).where(Workspace.slug == slug))
+    workspace = result.scalar_one_or_none()
+    if not workspace:
+        raise HTTPException(404, "Workspace not found")
+    if not is_admin:
+        if not user_id:
+            raise HTTPException(401, "Authentication required")
+        owner_check = await db.execute(
+            select(WorkspaceOwner).where(
+                WorkspaceOwner.workspace_id == workspace.id,
+                WorkspaceOwner.user_id == user_id,
+            )
+        )
+        if not owner_check.scalar_one_or_none():
+            raise HTTPException(403, "Access denied")
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    bookings_today = (await db.execute(
+        select(func.count()).select_from(Booking).where(
+            Booking.workspace_id == workspace.id,
+            Booking.created_at >= today_start,
+        )
+    )).scalar() or 0
+
+    bookings_month = (await db.execute(
+        select(func.count()).select_from(Booking).where(
+            Booking.workspace_id == workspace.id,
+            Booking.created_at >= month_start,
+        )
+    )).scalar() or 0
+
+    conversations_total = (await db.execute(
+        select(func.count()).select_from(ChatSession).where(
+            ChatSession.workspace_id == workspace.id,
+        )
+    )).scalar() or 0
+
+    conversations_booked = (await db.execute(
+        select(func.count()).select_from(ChatSession).where(
+            ChatSession.workspace_id == workspace.id,
+            ChatSession.booked == True,
+        )
+    )).scalar() or 0
+
+    return AnalyticsResponse(
+        bookings_today=bookings_today,
+        bookings_this_month=bookings_month,
+        conversations_total=conversations_total,
+        conversations_with_booking=conversations_booked,
+    )
+
+
+# ── Appointments ───────────────────────────────────────────────────────────
+
+class AppointmentItem(BaseModel):
+    id: str
+    customer_name: str
+    customer_email: str
+    service_name: str
+    channel: str
+    scheduled_for: str
+    duration_minutes: int
+
+
+@router.get("/{slug}/appointments", response_model=list[AppointmentItem])
+async def get_workspace_appointments(
+    slug: str,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+    user_id: str | None = Depends(get_current_user_optional),
+):
+    settings = get_settings()
+    is_admin = x_admin_key and x_admin_key == settings.admin_api_key
+    result = await db.execute(select(Workspace).where(Workspace.slug == slug))
+    workspace = result.scalar_one_or_none()
+    if not workspace:
+        raise HTTPException(404, "Workspace not found")
+    if not is_admin:
+        if not user_id:
+            raise HTTPException(401, "Authentication required")
+        owner_check = await db.execute(
+            select(WorkspaceOwner).where(
+                WorkspaceOwner.workspace_id == workspace.id,
+                WorkspaceOwner.user_id == user_id,
+            )
+        )
+        if not owner_check.scalar_one_or_none():
+            raise HTTPException(403, "Access denied")
+
+    bookings_result = await db.execute(
+        select(Booking)
+        .where(Booking.workspace_id == workspace.id)
+        .order_by(Booking.scheduled_for.desc())
+        .limit(limit)
+    )
+    bookings = bookings_result.scalars().all()
+
+    return [
+        AppointmentItem(
+            id=b.id,
+            customer_name=b.customer_name,
+            customer_email=b.customer_email,
+            service_name=b.service_name,
+            channel=b.channel,
+            scheduled_for=b.scheduled_for.isoformat(),
+            duration_minutes=b.duration_minutes,
+        )
+        for b in bookings
+    ]
