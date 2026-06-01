@@ -98,6 +98,9 @@ class Workspace(Base):
     owners: Mapped[list["WorkspaceOwner"]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"
     )
+    knowledge_docs: Mapped[list["KnowledgeDocument"]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
 
 
 class WorkspaceOwner(Base):
@@ -194,3 +197,19 @@ class Booking(Base):
     workspace: Mapped[Workspace] = relationship(back_populates="bookings")
 
     __table_args__ = (Index("ix_bookings_workspace_scheduled", "workspace_id", "scheduled_for"),)
+
+
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(20))  # 'pdf' | 'url' | 'text'
+    source_name: Mapped[str] = mapped_column(String(500))
+    content: Mapped[str] = mapped_column(Text)
+    char_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="knowledge_docs")

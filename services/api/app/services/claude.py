@@ -15,10 +15,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from anthropic import AsyncAnthropic
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models import Workspace
+from app.models.workspace import KnowledgeDocument
 from app.prompts.booking import build_system_prompt
 from app.services import calendly
 
@@ -179,7 +181,18 @@ async def chat_turn(
         (assistant_reply_text, updated_messages_list)
     """
     messages = messages + [{"role": "user", "content": user_message}]
-    system = build_system_prompt(workspace)
+
+    # Load knowledge base docs
+    kb_result = await db.execute(
+        select(KnowledgeDocument)
+        .where(KnowledgeDocument.workspace_id == workspace.id)
+        .order_by(KnowledgeDocument.created_at)
+    )
+    kb_docs = [
+        {"source_name": d.source_name, "content": d.content}
+        for d in kb_result.scalars()
+    ]
+    system = build_system_prompt(workspace, knowledge_docs=kb_docs if kb_docs else None)
 
     max_iterations = 6
     for _ in range(max_iterations):

@@ -47,6 +47,10 @@ class WorkspaceResponse(BaseModel):
     embed_code: str
     onboarding_step: str
     trial_status: str
+    assistant_name: str | None = None
+    greeting: str | None = None
+    tone: str | None = None
+    brand_primary: str | None = None
 
 
 class WorkspaceMeListItem(BaseModel):
@@ -136,6 +140,10 @@ async def create_workspace(
         embed_code=f'<script src="{api_base}/v1/widget/{workspace.slug}.js" async></script>',
         onboarding_step=workspace.onboarding_step,
         trial_status=workspace.trial_status,
+        assistant_name=workspace.assistant_name,
+        greeting=workspace.greeting,
+        tone=workspace.tone,
+        brand_primary=workspace.brand_primary,
     )
 
 
@@ -218,6 +226,83 @@ async def get_workspace(
         embed_code=f'<script src="{api_base}/v1/widget/{workspace.slug}.js" async></script>',
         onboarding_step=workspace.onboarding_step,
         trial_status=workspace.trial_status,
+        assistant_name=workspace.assistant_name,
+        greeting=workspace.greeting,
+        tone=workspace.tone,
+        brand_primary=workspace.brand_primary,
+    )
+
+
+# ── Settings PATCH ─────────────────────────────────────────────────────────
+
+class WorkspaceSettingsUpdate(BaseModel):
+    name: str | None = None
+    assistant_name: str | None = None
+    greeting: str | None = None
+    tone: str | None = None
+    brand_primary: str | None = None
+
+
+@router.patch("/{slug}/settings", response_model=WorkspaceResponse)
+async def update_workspace_settings(
+    slug: str,
+    payload: WorkspaceSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+    user_id: str | None = Depends(get_current_user_optional),
+):
+    """Update assistant/workspace settings. Auth: admin or workspace owner."""
+    settings = get_settings()
+    is_admin = x_admin_key and x_admin_key == settings.admin_api_key
+
+    result = await db.execute(select(Workspace).where(Workspace.slug == slug))
+    workspace = result.scalar_one_or_none()
+    if not workspace:
+        raise HTTPException(404, "Workspace not found")
+
+    if not is_admin:
+        if not user_id:
+            raise HTTPException(401, "Authentication required")
+        owner_check = await db.execute(
+            select(WorkspaceOwner).where(
+                WorkspaceOwner.workspace_id == workspace.id,
+                WorkspaceOwner.user_id == user_id,
+            )
+        )
+        if not owner_check.scalar_one_or_none():
+            raise HTTPException(403, "You don't have access to this workspace")
+
+    if payload.name is not None:
+        workspace.name = payload.name
+    if payload.assistant_name is not None:
+        workspace.assistant_name = payload.assistant_name
+    if payload.greeting is not None:
+        workspace.greeting = payload.greeting
+    if payload.tone is not None:
+        workspace.tone = payload.tone
+    if payload.brand_primary is not None:
+        workspace.brand_primary = payload.brand_primary
+
+    await db.commit()
+    await db.refresh(workspace)
+
+    api_base = settings.calendly_redirect_uri.rsplit("/v1/", 1)[0]
+    await db.refresh(workspace, ["calendly_token"])
+    return WorkspaceResponse(
+        id=workspace.id,
+        slug=workspace.slug,
+        name=workspace.name,
+        owner_email=workspace.owner_email,
+        whitelisted=workspace.whitelisted,
+        calendly_connected=workspace.calendly_token is not None,
+        calendly_connect_url=build_authorize_url(workspace.slug),
+        embed_code=f'<script src="{api_base}/v1/widget/{workspace.slug}.js" async></script>',
+        onboarding_step=workspace.onboarding_step,
+        trial_status=workspace.trial_status,
+        assistant_name=workspace.assistant_name,
+        greeting=workspace.greeting,
+        tone=workspace.tone,
+        brand_primary=workspace.brand_primary,
     )
 
 

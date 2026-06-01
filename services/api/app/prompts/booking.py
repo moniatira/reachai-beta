@@ -159,12 +159,31 @@ suggest reaching out to {workspace.owner_email} directly."""
     return "\n".join(lines)
 
 
-def build_system_prompt(workspace: Workspace) -> str:
+def _format_knowledge_docs(knowledge_docs: list[dict]) -> str:
+    """Build the knowledge base section from uploaded documents and URLs."""
+    lines = [
+        "═══════════════════════════════════════════════════════════════════",
+        "KNOWLEDGE BASE (uploaded documents & links)",
+        "═══════════════════════════════════════════════════════════════════",
+    ]
+    for doc in knowledge_docs:
+        source_name = doc.get("source_name", "Unknown source")
+        content = doc.get("content", "")
+        lines.append(f"--- SOURCE: {source_name} ---")
+        lines.append(content[:5000])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def build_system_prompt(workspace: Workspace, knowledge_docs: list[dict] | None = None) -> str:
     """Build the per-workspace system prompt with extracted business knowledge."""
-    return SYSTEM_PROMPT_TEMPLATE.format(
+    base = SYSTEM_PROMPT_TEMPLATE.format(
         assistant_name=workspace.assistant_name,
         business_name=workspace.name,
         business_knowledge_section=_format_business_knowledge(workspace),
         tone=workspace.tone,
         current_date=datetime.now().strftime("%A, %B %d, %Y"),
     )
+    if knowledge_docs:
+        base = base + "\n\n" + _format_knowledge_docs(knowledge_docs)
+    return base
