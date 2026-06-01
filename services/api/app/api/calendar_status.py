@@ -18,7 +18,7 @@ from app.core.db import get_db
 from app.core.jwt_utils import get_current_user_optional
 from app.models import Workspace
 from app.models.calendar_connection import CalendarConnection
-from app.models.workspace import WorkspaceOwner
+from app.models.workspace import WorkspaceOwner, CalendlyToken
 from app.services.calendar import PROVIDER_NAMES, list_connections_for_workspace
 from app.services.calendar.registry import _instantiate
 
@@ -165,8 +165,23 @@ async def disconnect_provider(
         )
     )
     conn = result.scalar_one_or_none()
+
+    # For Calendly, also wipe the CalendlyToken so next OAuth shows fresh consent.
+    # Do this before the 404 check — the token may be orphaned (conn already deleted).
+    if provider == "calendly":
+        token_result = await db.execute(
+            select(CalendlyToken).where(CalendlyToken.workspace_id == workspace.id)
+        )
+        token = token_result.scalar_one_or_none()
+        if token:
+            await db.delete(token)
+
     if not conn:
-        raise HTTPException(404, f"No {provider} connection found")
+        # Token-only cleanup path — commit what we deleted and return success
+        if workspace.primary_calendar_provider == provider:
+            workspace.primary_calendar_provider = None
+        await db.commit()
+        return {"ok": True, "disconnected": provider, "note": "no CalendarConnection found, CalendlyToken cleared"}
 
     await db.delete(conn)
 
