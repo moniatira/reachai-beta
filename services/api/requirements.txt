@@ -15,6 +15,7 @@ PyJWT==2.9.0
 beautifulsoup4==4.12.3
 lxml==5.3.0
 pypdf==4.3.1
+fpdf2==2.7.9
 
 # NEW for Day 3 — Google Calendar API
 google-auth==2.35.0
