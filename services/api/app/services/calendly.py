@@ -144,6 +144,71 @@ async def get_current_user(access_token: str) -> dict:
     return data["resource"]
 
 
+async def register_webhook_subscription(
+    access_token: str,
+    user_uri: str,
+    organization_uri: str,
+    webhook_url: str,
+) -> str | None:
+    """Register a Calendly webhook subscription and return its signing key.
+
+    Deletes any existing subscription for the same URL first so we always
+    get a fresh signing key we can store.
+    Returns None if registration fails (non-fatal — webhook just won't verify).
+    """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        # List existing subscriptions and delete ours if present
+        try:
+            list_resp = await client.get(
+                f"{settings.calendly_api_base}/webhook_subscriptions",
+                headers=headers,
+                params={
+                    "organization": organization_uri,
+                    "user": user_uri,
+                    "scope": "user",
+                },
+            )
+            if list_resp.status_code == 200:
+                for sub in list_resp.json().get("collection", []):
+                    if sub.get("callback_url") == webhook_url:
+                        sub_uri = sub.get("uri", "")
+                        if sub_uri:
+                            await client.delete(sub_uri, headers=headers)
+                            _log.info("Deleted existing Calendly webhook subscription %s", sub_uri)
+        except Exception as exc:
+            _log.warning("Could not list/delete existing Calendly webhooks: %s", exc)
+
+        # Create fresh subscription
+        try:
+            resp = await client.post(
+                f"{settings.calendly_api_base}/webhook_subscriptions",
+                headers=headers,
+                json={
+                    "url": webhook_url,
+                    "events": ["invitee.created", "invitee.canceled"],
+                    "organization": organization_uri,
+                    "user": user_uri,
+                    "scope": "user",
+                },
+            )
+            if resp.status_code in (200, 201):
+                resource = resp.json().get("resource", {})
+                key = resource.get("signing_key")
+                _log.info("Registered Calendly webhook subscription, signing_key present=%s", bool(key))
+                return key
+            else:
+                _log.warning("Calendly webhook registration returned %s: %s", resp.status_code, resp.text[:300])
+        except Exception as exc:
+            _log.warning("Failed to register Calendly webhook: %s", exc)
+
+    return None
+
+
 async def list_event_types(db: AsyncSession, workspace: Workspace) -> list[dict]:
     """Return the SMB's bookable services (Calendly event types)."""
     access_token = await get_valid_access_token(db, workspace)

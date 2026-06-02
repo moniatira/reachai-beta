@@ -78,10 +78,11 @@ TOOLS: list[dict] = [
     {
         "name": "confirm_booking",
         "description": (
-            "Confirm an appointment: creates a booking record and sends the customer a confirmation email with a .ics calendar invite. "
-            "The booking is fully confirmed — do NOT share any external links or ask the customer to do anything else. "
-            "You MUST have the customer's name and email before calling this. "
-            "Phone is encouraged but optional."
+            "Confirm an appointment. Behaviour depends on the connected calendar:\n"
+            "• Calendly: returns a pre-filled `calendly_link` the customer must click to complete the booking on Calendly. "
+            "Share this link exactly as returned and tell the customer they will receive a confirmation email once they confirm on Calendly.\n"
+            "• Google / Outlook: creates the event directly and sends a confirmation email. Booking is fully done — no link needed.\n"
+            "You MUST have the customer's name and email before calling this. Phone is encouraged but optional."
         ),
         "input_schema": {
             "type": "object",
@@ -260,12 +261,59 @@ async def _execute_tool(
                     await db.delete(old)
                     logger.info("Deleted old booking %s for reschedule", cancel_booking_id)
 
-            # Call the calendar provider to create the event — only for providers
-            # that support real-time booking (Google, Outlook). Calendly requires
-            # the customer to visit a scheduling URL which we no longer do.
             provider = await get_provider_for_workspace(workspace, db)
             join_url = None
 
+            # Detect Calendly via provider OR legacy CalendlyToken (no CalendarConnection yet)
+            is_calendly = (
+                (provider is not None and not getattr(provider, "supports_real_time_booking", True))
+                or (provider is None and workspace.calendly_token is not None)
+            )
+
+            # Calendly: cannot create events server-side — return a pre-filled
+            # booking link for the customer to complete. A webhook fires when
+            # they confirm, which saves the booking and sends the email.
+            if is_calendly:
+                try:
+                    if provider:
+                        slot = CalendarSlot(
+                            start=scheduled_for,
+                            end=scheduled_for + timedelta(minutes=duration_minutes),
+                            service_id=service_id,
+                            provider_metadata={},
+                        )
+                        req = BookingRequest(
+                            service_id=service_id,
+                            slot=slot,
+                            customer_name=customer_name,
+                            customer_email=customer_email,
+                            customer_phone=customer_phone,
+                        )
+                        conf = await provider.create_booking(req)
+                        calendly_link = conf.confirmation_url
+                    else:
+                        # Legacy path: CalendlyToken exists but no CalendarConnection
+                        from app.services.calendly import list_event_types
+                        event_types = await list_event_types(db, workspace)
+                        svc = next((et for et in event_types if et["uri"] == service_id), None)
+                        if not svc or not svc.get("scheduling_url"):
+                            return {"error": "Could not find Calendly booking URL for this service."}
+                        slot_utc = scheduled_for.astimezone(timezone.utc)
+                        time_str = slot_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+                        name_encoded = customer_name.replace(" ", "%20")
+                        calendly_link = (
+                            f"{svc['scheduling_url']}/{time_str}"
+                            f"?name={name_encoded}&email={customer_email}"
+                        )
+                    return {
+                        "requires_calendly_confirmation": True,
+                        "calendly_link": calendly_link,
+                    }
+                except Exception as e:
+                    logger.warning("Failed to generate Calendly booking link: %s", e)
+                    return {"error": "Could not generate booking link — please try again."}
+
+            # Google / Outlook: create the calendar event directly
             if provider and getattr(provider, "supports_real_time_booking", False):
                 try:
                     slot = CalendarSlot(

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     calendly_redirect_uri: str = "http://localhost:8000/v1/calendly/callback"
     calendly_api_base: str = "https://api.calendly.com"
     calendly_oauth_base: str = "https://auth.calendly.com"
+    calendly_webhook_signing_key: str = ""
 
     admin_api_key: str = "change-me-in-production"
     session_secret_key: str = "change-me-in-production"

@@ -7,10 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.models import Workspace
 from app.models.calendar_connection import CalendarConnection
+from app.core.config import get_settings
 from app.services.calendly import (
     CalendlyError,
     build_authorize_url,
     exchange_code_for_tokens,
+    get_current_user,
+    register_webhook_subscription,
     save_tokens,
 )
 
@@ -45,7 +48,29 @@ async def oauth_callback(
 
     try:
         token_response = await exchange_code_for_tokens(code)
+        access_token = token_response["access_token"]
         calendly_token = await save_tokens(db, workspace, token_response)
+
+        # Fetch user info to get organization URI (needed for webhook registration)
+        user_info = await get_current_user(access_token)
+        org_uri = user_info.get("current_organization", "")
+
+        # Build webhook URL from our API base
+        settings = get_settings()
+        api_base = settings.calendly_redirect_uri.rsplit("/v1/", 1)[0]
+        webhook_url = f"{api_base}/v1/webhooks/calendly"
+
+        # Register webhook subscription and capture signing key
+        signing_key = await register_webhook_subscription(
+            access_token=access_token,
+            user_uri=calendly_token.calendly_user_uri,
+            organization_uri=org_uri,
+            webhook_url=webhook_url,
+        )
+
+        conn_meta = {"scheduling_url": calendly_token.scheduling_url}
+        if signing_key:
+            conn_meta["webhook_signing_key"] = signing_key
 
         # Mirror into calendar_connections so the wizard's polling endpoint detects it
         conn_result = await db.execute(
@@ -62,6 +87,10 @@ async def oauth_callback(
             existing_conn.expires_at = calendly_token.expires_at
             existing_conn.account_email = calendly_token.calendly_email
             existing_conn.account_id = calendly_token.calendly_user_uri
+            existing_conn.connection_metadata = {
+                **(existing_conn.connection_metadata or {}),
+                **conn_meta,
+            }
             existing_conn.active = True
         else:
             db.add(CalendarConnection(
@@ -72,7 +101,7 @@ async def oauth_callback(
                 expires_at=calendly_token.expires_at,
                 account_email=calendly_token.calendly_email,
                 account_id=calendly_token.calendly_user_uri,
-                connection_metadata={"scheduling_url": calendly_token.scheduling_url},
+                connection_metadata=conn_meta,
                 active=True,
             ))
 

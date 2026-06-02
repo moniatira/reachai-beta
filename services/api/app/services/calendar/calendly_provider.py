@@ -131,21 +131,29 @@ class CalendlyProvider(CalendarProvider):
         return slots
 
     async def create_booking(self, request: BookingRequest) -> BookingConfirmation:
-        """Calendly doesn't support direct API booking — return scheduling link."""
+        """Calendly doesn't support direct API booking — return a pre-auth scheduling link.
+
+        If the slot's provider_metadata already has a scheduling_url (slot-specific),
+        use that directly. Otherwise build one from the service's base booking_url +
+        the slot start time so the customer lands on Calendly with that exact slot
+        pre-selected.
+        """
         scheduling_url = request.slot.provider_metadata.get("scheduling_url")
         if not scheduling_url:
             services = await self.list_services()
             service = next((s for s in services if s.id == request.service_id), None)
-            scheduling_url = service.booking_url if service else None
+            base_url = service.booking_url if service else None
 
-        if not scheduling_url:
-            raise CalendarProviderError("No Calendly scheduling URL available")
+            if not base_url:
+                raise CalendarProviderError("No Calendly scheduling URL available")
 
-        prefilled = (
-            f"{scheduling_url}"
-            f"?name={request.customer_name.replace(' ', '%20')}"
-            f"&email={request.customer_email}"
-        )
+            # Append the slot time so Calendly pre-selects it for the customer
+            slot_utc = request.slot.start.astimezone(timezone.utc)
+            time_str = slot_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            scheduling_url = f"{base_url}/{time_str}"
+
+        name_encoded = request.customer_name.replace(" ", "%20")
+        prefilled = f"{scheduling_url}?name={name_encoded}&email={request.customer_email}"
 
         return BookingConfirmation(
             booking_id=f"calendly-pending-{request.slot.start.isoformat()}",
