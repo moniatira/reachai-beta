@@ -16,6 +16,7 @@ class ChatRequest(BaseModel):
     workspace_slug: str = Field(..., description="The workspace identifier (data-workspace attribute)")
     session_id: str | None = Field(None, description="Continue an existing session; omit to start new")
     message: str = Field(..., min_length=1, max_length=2000)
+    timezone: str | None = Field(None, description="Customer's IANA timezone e.g. America/New_York")
 
 
 class ChatResponse(BaseModel):
@@ -69,7 +70,8 @@ async def chat(
 
     try:
         reply, updated_messages, meta = await chat_turn(
-            db, workspace, session.id, session.messages, payload.message
+            db, workspace, session.id, session.messages, payload.message,
+            user_timezone=payload.timezone,
         )
     except Exception as e:
         await db.rollback()

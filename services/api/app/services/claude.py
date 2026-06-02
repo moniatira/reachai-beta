@@ -77,8 +77,8 @@ TOOLS: list[dict] = [
         "name": "confirm_booking",
         "description": (
             "Confirm an appointment after collecting the customer's info. "
-            "Creates a booking record, sends a confirmation email with .ics calendar invite to the customer. "
-            "For Calendly workspaces also returns a link the customer can use to complete the booking. "
+            "Confirm an appointment: creates a booking record and sends the customer a confirmation email with a .ics calendar invite. "
+            "The booking is complete — no further action needed from the customer. "
             "You MUST have the customer's name and email before calling this. "
             "Phone is encouraged but optional."
         ),
@@ -245,12 +245,13 @@ async def _execute_tool(
                     await db.delete(old)
                     logger.info("Deleted old booking %s for reschedule", cancel_booking_id)
 
-            # Call the calendar provider to create/confirm the event
+            # Call the calendar provider to create the event — only for providers
+            # that support real-time booking (Google, Outlook). Calendly requires
+            # the customer to visit a scheduling URL which we no longer do.
             provider = await get_provider_for_workspace(workspace, db)
-            confirmation_url = scheduling_url
             join_url = None
 
-            if provider:
+            if provider and getattr(provider, "supports_real_time_booking", False):
                 try:
                     slot = CalendarSlot(
                         start=scheduled_for,
@@ -266,8 +267,6 @@ async def _execute_tool(
                         customer_phone=customer_phone,
                     )
                     conf = await provider.create_booking(req)
-                    if conf.confirmation_url:
-                        confirmation_url = conf.confirmation_url
                     if conf.join_url:
                         join_url = conf.join_url
                 except Exception as e:
@@ -288,6 +287,11 @@ async def _execute_tool(
             db.add(booking)
             await db.flush()
 
+            # Build reschedule links for the confirmation email
+            chat_url = workspace.website_url or None
+            # scheduling_url here is the event-type booking page (e.g. Calendly link)
+            reschedule_url = scheduling_url or None
+
             # Send confirmation email with .ics
             email_sent = False
             try:
@@ -301,6 +305,8 @@ async def _execute_tool(
                     business_email=workspace.owner_email,
                     scheduled_for=scheduled_for,
                     duration_minutes=duration_minutes,
+                    reschedule_url=reschedule_url,
+                    chat_url=chat_url,
                 )
                 await send_email(
                     to=customer_email,
@@ -331,8 +337,6 @@ async def _execute_tool(
                 "duration_minutes": duration_minutes,
                 "confirmation_email_sent": email_sent,
             }
-            if confirmation_url:
-                result["calendly_link"] = confirmation_url
             if join_url:
                 result["video_link"] = join_url
             return result
@@ -384,6 +388,7 @@ async def chat_turn(
     session_id: str,
     messages: list[dict],
     user_message: str,
+    user_timezone: str | None = None,
 ) -> tuple[str, list[dict], dict]:
     """Process one user turn through Claude with tool use loop.
 
@@ -406,7 +411,7 @@ async def chat_turn(
         {"source_name": d.source_name, "content": d.content}
         for d in kb_result.scalars()
     ]
-    system = build_system_prompt(workspace, knowledge_docs=kb_docs if kb_docs else None)
+    system = build_system_prompt(workspace, knowledge_docs=kb_docs if kb_docs else None, user_timezone=user_timezone)
 
     max_iterations = 8
     for _ in range(max_iterations):

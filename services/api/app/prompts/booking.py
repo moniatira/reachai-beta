@@ -81,9 +81,13 @@ GROUND RULES
 - Bookings require at least 24 hours advance notice (enforced automatically).
   If a customer asks for today or tomorrow morning, explain this gracefully.
 - After confirm_booking succeeds, tell the customer their confirmation email
-  with a calendar invite was sent. For Calendly workspaces, also share the
-  link so they can finalize through Calendly.
+  with a calendar invite was sent — the booking is fully confirmed, no
+  further action needed.
 - Today is {current_date}. Use this for "tomorrow", "next week", etc.
+- User's timezone: {user_timezone}. Present ALL times and slots in this
+  timezone with a clear label, e.g. "Thursday June 12 at 2:00 PM EST".
+  If timezone is unknown, ask the customer which timezone they're in before
+  showing slots.
 - If asked something completely off-topic, politely redirect: "That's outside
   what I can help with — I'm here to answer questions about {business_name}
   or help you book."
@@ -195,7 +199,11 @@ def _format_knowledge_docs(knowledge_docs: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def build_system_prompt(workspace: Workspace, knowledge_docs: list[dict] | None = None) -> str:
+def build_system_prompt(
+    workspace: Workspace,
+    knowledge_docs: list[dict] | None = None,
+    user_timezone: str | None = None,
+) -> str:
     """Build the per-workspace system prompt with extracted business knowledge."""
     base = SYSTEM_PROMPT_TEMPLATE.format(
         assistant_name=workspace.assistant_name,
@@ -203,6 +211,7 @@ def build_system_prompt(workspace: Workspace, knowledge_docs: list[dict] | None 
         business_knowledge_section=_format_business_knowledge(workspace),
         tone=workspace.tone,
         current_date=datetime.now().strftime("%A, %B %d, %Y"),
+        user_timezone=user_timezone or "unknown — ask the customer",
     )
     if knowledge_docs:
         base = base + "\n\n" + _format_knowledge_docs(knowledge_docs)

@@ -73,6 +73,9 @@ _INLINE_WIDGET_JS = r"""
 
   var primary = cfg.primaryColor || '#534AB7';
   var sessionId = null;
+  var userTimezone = (function(){
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch(e){ return null; }
+  })();
 
   var css = ''
     + '.rai-bubble{position:fixed;bottom:24px;right:24px;width:60px;height:60px;border-radius:50%;background:' + primary + ';display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:999998;transition:transform .15s}'
@@ -212,7 +215,8 @@ _INLINE_WIDGET_JS = r"""
       body: JSON.stringify({
         workspace_slug: cfg.workspaceSlug,
         session_id: sessionId,
-        message: text
+        message: text,
+        timezone: userTimezone
       })
     })
     .then(function(r){

@@ -81,6 +81,8 @@ def booking_confirmation_email(
     business_email: str,
     scheduled_for: datetime,
     duration_minutes: int,
+    reschedule_url: str | None = None,
+    chat_url: str | None = None,
 ) -> tuple[str, str, str, bytes]:
     """Build a booking confirmation email with an .ics calendar attachment.
 
@@ -92,6 +94,29 @@ def booking_confirmation_email(
     friendly = _friendly_dt(scheduled_for)
     event_uid = f"{_uuid.uuid4()}@reachai.co"
     now_stamp = _ics_dt(datetime.now(timezone.utc))
+
+    # Build reschedule buttons HTML
+    reschedule_btns = []
+    if chat_url:
+        reschedule_btns.append(
+            f'<a class="reschedule-btn" href="{chat_url}">💬 Chat to reschedule</a>'
+        )
+    if reschedule_url:
+        reschedule_btns.append(
+            f'<a class="reschedule-btn" href="{reschedule_url}">📅 Pick a new time directly</a>'
+        )
+    if reschedule_btns:
+        reschedule_section = (
+            '<div class="reschedule">'
+            '<h3>Need to reschedule?</h3>'
+            '<div class="reschedule-btns">'
+            + "".join(reschedule_btns)
+            + "</div></div>"
+        )
+    else:
+        reschedule_section = (
+            '<p class="small">To reschedule or cancel, reply to this email or return to the website chat.</p>'
+        )
 
     ics = (
         "BEGIN:VCALENDAR\r\n"
@@ -137,6 +162,11 @@ def booking_confirmation_email(
   .sub{{font-size:13px;color:#5F5E5A}}
   .small{{font-size:13px;color:#888780}}
   .footer{{text-align:center;font-size:12px;color:#888780;margin-top:32px}}
+  .reschedule{{background:#F8F8FC;border:1px solid #E5E5EE;border-radius:10px;padding:18px 22px;margin-top:20px}}
+  .reschedule h3{{font-size:14px;font-weight:600;color:#1A1F3D;margin:0 0 12px}}
+  .reschedule-btns{{display:flex;gap:10px;flex-wrap:wrap}}
+  .reschedule-btn{{display:inline-block;padding:9px 18px;border-radius:8px;font-size:13px;font-weight:500;text-decoration:none;border:1px solid #D4D0F5;color:#534AB7;background:#fff}}
+  .reschedule-btn:hover{{background:#F0EFFE}}
 </style>
 </head>
 <body>
@@ -152,12 +182,22 @@ def booking_confirmation_email(
     <div class="sub">Duration: {duration_minutes} minutes</div>
   </div>
   <p>A calendar invite (.ics) is attached — open it to add this appointment to your calendar automatically.</p>
-  <p class="small">Booked via ReachAI. To reschedule or cancel, return to the website chat.</p>
+  {reschedule_section}
+  <p class="small">Questions? Reply to this email or contact {business_name} directly.</p>
 </div>
 <div class="footer">&#169; ReachAI &middot; The AI front desk for SMBs</div>
 </div>
 </body>
 </html>"""
+
+    reschedule_text_lines = ["Need to reschedule?"]
+    if chat_url:
+        reschedule_text_lines.append(f"  Chat: {chat_url}")
+    if reschedule_url:
+        reschedule_text_lines.append(f"  Pick a new time: {reschedule_url}")
+    if not chat_url and not reschedule_url:
+        reschedule_text_lines.append("  Reply to this email or return to the website chat.")
+    reschedule_text = "\n".join(reschedule_text_lines)
 
     text = (
         f"Your appointment is confirmed!\n\n"
@@ -166,7 +206,7 @@ def booking_confirmation_email(
         f"{friendly}\n"
         f"Duration: {duration_minutes} minutes\n\n"
         f"A calendar invite (.ics) is attached — open it to add to your calendar.\n\n"
-        f"To reschedule or cancel, return to the website chat.\n\n"
+        f"{reschedule_text}\n\n"
         f"— {business_name}"
     )
 
