@@ -27,11 +27,14 @@ async def send_email(
     html: str,
     text: str | None = None,
     reply_to: str | None = None,
+    attachments: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Send a transactional email via Resend.
 
     Returns the Resend response dict (includes message id for tracking).
     Raises EmailError on any failure.
+
+    attachments: list of {"filename": str, "content": str} where content is base64-encoded.
     """
     if not settings.resend_api_key:
         logger.error("RESEND_API_KEY not set — email not sent")
@@ -47,6 +50,8 @@ async def send_email(
         payload["text"] = text
     if reply_to:
         payload["reply_to"] = reply_to
+    if attachments:
+        payload["attachments"] = attachments
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         try:

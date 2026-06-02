@@ -68,14 +68,23 @@ async def chat(
     await db.flush()
 
     try:
-        reply, updated_messages = await chat_turn(
-            db, workspace, session.messages, payload.message
+        reply, updated_messages, meta = await chat_turn(
+            db, workspace, session.id, session.messages, payload.message
         )
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
 
     session.messages = updated_messages
+    if meta.get("booked"):
+        session.booked = True
+    if meta.get("customer_name"):
+        session.customer_name = meta["customer_name"]
+    if meta.get("customer_email"):
+        session.customer_email = meta["customer_email"]
+    if meta.get("customer_phone"):
+        session.customer_phone = meta["customer_phone"]
+
     await db.commit()
 
     return ChatResponse(

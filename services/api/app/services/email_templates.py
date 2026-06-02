@@ -3,6 +3,9 @@
 Keep these simple — plain HTML, no frameworks. Render well in Gmail,
 Outlook, Apple Mail. Tested by sending to all three.
 """
+import base64
+import uuid as _uuid
+from datetime import datetime, timedelta, timezone
 
 
 def magic_link_email(magic_url: str, is_new_user: bool = False) -> tuple[str, str, str]:
@@ -59,3 +62,112 @@ If you didn't request it, ignore this email — no action needed.
 """
 
     return subject, html, text
+
+
+def _ics_dt(dt: datetime) -> str:
+    utc = dt.astimezone(timezone.utc)
+    return utc.strftime("%Y%m%dT%H%M%SZ")
+
+
+def _friendly_dt(dt: datetime) -> str:
+    utc = dt.astimezone(timezone.utc)
+    return utc.strftime("%B %d, %Y at %I:%M %p UTC")
+
+
+def booking_confirmation_email(
+    customer_name: str,
+    service_name: str,
+    business_name: str,
+    business_email: str,
+    scheduled_for: datetime,
+    duration_minutes: int,
+) -> tuple[str, str, str, bytes]:
+    """Build a booking confirmation email with an .ics calendar attachment.
+
+    Returns (subject, html, text, ics_bytes).
+    """
+    if scheduled_for.tzinfo is None:
+        scheduled_for = scheduled_for.replace(tzinfo=timezone.utc)
+    end_time = scheduled_for + timedelta(minutes=duration_minutes)
+    friendly = _friendly_dt(scheduled_for)
+    event_uid = f"{_uuid.uuid4()}@reachai.co"
+    now_stamp = _ics_dt(datetime.now(timezone.utc))
+
+    ics = (
+        "BEGIN:VCALENDAR\r\n"
+        "VERSION:2.0\r\n"
+        "PRODID:-//ReachAI//ReachAI Booking//EN\r\n"
+        "METHOD:REQUEST\r\n"
+        "BEGIN:VEVENT\r\n"
+        f"UID:{event_uid}\r\n"
+        f"DTSTAMP:{now_stamp}\r\n"
+        f"DTSTART:{_ics_dt(scheduled_for)}\r\n"
+        f"DTEND:{_ics_dt(end_time)}\r\n"
+        f"SUMMARY:{service_name} with {business_name}\r\n"
+        f"DESCRIPTION:Your {service_name} appointment with {business_name} is confirmed.\r\n"
+        f"ORGANIZER;CN={business_name}:mailto:{business_email}\r\n"
+        "STATUS:CONFIRMED\r\n"
+        "SEQUENCE:0\r\n"
+        "BEGIN:VALARM\r\n"
+        "TRIGGER:-PT24H\r\n"
+        f"DESCRIPTION:Reminder: {service_name} with {business_name}\r\n"
+        "ACTION:DISPLAY\r\n"
+        "END:VALARM\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+
+    subject = f"Confirmed: {service_name} with {business_name}"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body{{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#FAFAFC;color:#1A1F3D}}
+  .wrap{{max-width:520px;margin:0 auto;padding:48px 24px}}
+  .card{{background:#fff;border:1px solid #E5E5EE;border-radius:14px;padding:36px}}
+  .logo{{font-size:18px;font-weight:600;color:#1A1F3D;margin-bottom:32px;letter-spacing:-.02em}}
+  .mark{{display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background:#534AB7;color:#fff;border-radius:7px;font-weight:700;margin-right:6px;vertical-align:middle;font-size:12px}}
+  h1{{font-size:22px;font-weight:600;margin:0 0 14px;color:#0A0E27;letter-spacing:-.01em}}
+  p{{font-size:15px;line-height:1.6;color:#5F5E5A;margin:0 0 18px}}
+  .box{{background:#F4F4FF;border:1px solid #D4D0F5;border-radius:10px;padding:20px 24px;margin:20px 0}}
+  .label{{font-size:12px;font-weight:600;color:#534AB7;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}}
+  .val{{font-size:16px;font-weight:600;color:#1A1F3D;margin-bottom:2px}}
+  .sub{{font-size:13px;color:#5F5E5A}}
+  .small{{font-size:13px;color:#888780}}
+  .footer{{text-align:center;font-size:12px;color:#888780;margin-top:32px}}
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card">
+  <div class="logo"><span class="mark">R</span>ReachAI</div>
+  <h1>&#10003; Your appointment is confirmed</h1>
+  <p>Hi {customer_name}, you're all set! Here are your details:</p>
+  <div class="box">
+    <div class="label">Service</div>
+    <div class="val">{service_name}</div>
+    <div class="label" style="margin-top:14px">Date &amp; Time</div>
+    <div class="val">{friendly}</div>
+    <div class="sub">Duration: {duration_minutes} minutes</div>
+  </div>
+  <p>A calendar invite (.ics) is attached — open it to add this appointment to your calendar automatically.</p>
+  <p class="small">Booked via ReachAI. To reschedule or cancel, return to the website chat.</p>
+</div>
+<div class="footer">&#169; ReachAI &middot; The AI front desk for SMBs</div>
+</div>
+</body>
+</html>"""
+
+    text = (
+        f"Your appointment is confirmed!\n\n"
+        f"Hi {customer_name},\n\n"
+        f"{service_name} with {business_name}\n"
+        f"{friendly}\n"
+        f"Duration: {duration_minutes} minutes\n\n"
+        f"A calendar invite (.ics) is attached — open it to add to your calendar.\n\n"
+        f"To reschedule or cancel, return to the website chat.\n\n"
+        f"— {business_name}"
+    )
+
+    return subject, html, text, ics.encode("utf-8")
