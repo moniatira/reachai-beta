@@ -51,6 +51,8 @@ TOOLS: list[dict] = [
         "description": (
             "Find available appointment slots for a specific service within a date range. "
             "Only slots at least 24 hours from now are returned. "
+            "Each slot includes a display_time already formatted in the customer's local timezone — "
+            "use display_time verbatim when presenting options. "
             "Call list_services first to get service IDs."
         ),
         "input_schema": {
@@ -144,6 +146,7 @@ async def _execute_tool(
     tool_name: str,
     tool_input: dict[str, Any],
     meta: dict,
+    user_timezone: str | None = None,
 ) -> dict[str, Any]:
     """Run a single tool call and return its result for Claude."""
     try:
@@ -199,9 +202,28 @@ async def _execute_tool(
                         f"(minimum 24h advance notice required). Try a wider range."
                     ),
                 }
+
+            # Convert slot times to the user's local timezone so Claude
+            # presents them correctly without needing to do any conversion.
+            tz_obj = None
+            tz_label = "UTC"
+            if user_timezone:
+                try:
+                    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+                    tz_obj = ZoneInfo(user_timezone)
+                    tz_label = user_timezone
+                except Exception:
+                    pass
+
+            def _fmt_slot(dt: datetime) -> str:
+                local = dt.astimezone(tz_obj) if tz_obj else dt
+                return local.strftime("%A, %B %d at %I:%M %p") + f" ({tz_label})"
+
             return {
+                "timezone": tz_label,
                 "slots": [
                     {
+                        "display_time": _fmt_slot(s.start),
                         "start_time": s.start.isoformat(),
                         "end_time": s.end.isoformat(),
                         "scheduling_url": s.provider_metadata.get("scheduling_url", ""),
@@ -428,7 +450,8 @@ async def chat_turn(
             tool_results = []
             for tu in tool_uses:
                 result = await _execute_tool(
-                    db, workspace, session_id, tu.name, dict(tu.input), meta
+                    db, workspace, session_id, tu.name, dict(tu.input), meta,
+                    user_timezone=user_timezone,
                 )
                 tool_results.append(
                     {"type": "tool_result", "tool_use_id": tu.id, "content": str(result)}
