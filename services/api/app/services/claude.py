@@ -78,9 +78,8 @@ TOOLS: list[dict] = [
     {
         "name": "confirm_booking",
         "description": (
-            "Confirm an appointment after collecting the customer's info. "
             "Confirm an appointment: creates a booking record and sends the customer a confirmation email with a .ics calendar invite. "
-            "The booking is complete — no further action needed from the customer. "
+            "The booking is fully confirmed — do NOT share any external links or ask the customer to do anything else. "
             "You MUST have the customer's name and email before calling this. "
             "Phone is encouraged but optional."
         ),
@@ -105,10 +104,6 @@ TOOLS: list[dict] = [
                 "duration_minutes": {
                     "type": "integer",
                     "description": "Appointment duration in minutes (from list_services)",
-                },
-                "scheduling_url": {
-                    "type": "string",
-                    "description": "The scheduling_url from the chosen slot (pass through from find_available_slots)",
                 },
                 "cancel_booking_id": {
                     "type": "string",
@@ -226,7 +221,6 @@ async def _execute_tool(
                         "display_time": _fmt_slot(s.start),
                         "start_time": s.start.isoformat(),
                         "end_time": s.end.isoformat(),
-                        "scheduling_url": s.provider_metadata.get("scheduling_url", ""),
                     }
                     for s in slots
                 ]
@@ -243,7 +237,6 @@ async def _execute_tool(
             service_name = tool_input["service_name"]
             scheduled_for_str = tool_input["scheduled_for"]
             duration_minutes = int(tool_input["duration_minutes"])
-            scheduling_url = tool_input.get("scheduling_url", "")
             cancel_booking_id = tool_input.get("cancel_booking_id")
 
             try:
@@ -279,7 +272,7 @@ async def _execute_tool(
                         start=scheduled_for,
                         end=scheduled_for + timedelta(minutes=duration_minutes),
                         service_id=service_id,
-                        provider_metadata={"scheduling_url": scheduling_url},
+                        provider_metadata={},
                     )
                     req = BookingRequest(
                         service_id=service_id,
@@ -309,10 +302,19 @@ async def _execute_tool(
             db.add(booking)
             await db.flush()
 
-            # Build reschedule links for the confirmation email
+            # Build reschedule links for the confirmation email.
+            # Look up the service's booking URL server-side — never expose it to Claude.
             chat_url = workspace.website_url or None
-            # scheduling_url here is the event-type booking page (e.g. Calendly link)
-            reschedule_url = scheduling_url or None
+            reschedule_url: str | None = None
+            try:
+                _provider = await get_provider_for_workspace(workspace, db)
+                if _provider:
+                    _services = await _provider.list_services()
+                    _svc = next((s for s in _services if s.id == service_id), None)
+                    if _svc and _svc.booking_url:
+                        reschedule_url = _svc.booking_url
+            except Exception:
+                pass
 
             # Send confirmation email with .ics
             email_sent = False
