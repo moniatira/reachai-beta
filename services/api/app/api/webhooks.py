@@ -158,13 +158,14 @@ async def _handle_invitee_created(
         end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
         duration_minutes = max(1, int((end_dt - scheduled_for).total_seconds() / 60))
 
-    # Save booking record
+    # Save booking record — event_uri marks this as webhook-confirmed
     booking = Booking(
         workspace_id=workspace.id,
         session_id=None,
         customer_name=customer_name,
         customer_email=customer_email,
         event_type_uri=event_type_uri,
+        event_uri=event_uri,       # full scheduled_event URI = confirmed by Calendly
         service_name=service_name,
         scheduled_for=scheduled_for,
         duration_minutes=duration_minutes,

@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -344,10 +344,16 @@ async def get_workspace_analytics(
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
+    confirmed_filter = or_(
+        Booking.event_uri.is_not(None),
+        Booking.session_id.is_not(None),
+    )
+
     bookings_today = (await db.execute(
         select(func.count()).select_from(Booking).where(
             Booking.workspace_id == workspace.id,
             Booking.created_at >= today_start,
+            confirmed_filter,
         )
     )).scalar() or 0
 
@@ -355,6 +361,7 @@ async def get_workspace_analytics(
         select(func.count()).select_from(Booking).where(
             Booking.workspace_id == workspace.id,
             Booking.created_at >= month_start,
+            confirmed_filter,
         )
     )).scalar() or 0
 
@@ -419,7 +426,16 @@ async def get_workspace_appointments(
 
     bookings_result = await db.execute(
         select(Booking)
-        .where(Booking.workspace_id == workspace.id)
+        .where(
+            Booking.workspace_id == workspace.id,
+            # Only show confirmed bookings:
+            # - event_uri set = confirmed via Calendly webhook
+            # - session_id set = booked directly via Google/Outlook
+            or_(
+                Booking.event_uri.is_not(None),
+                Booking.session_id.is_not(None),
+            ),
+        )
         .order_by(Booking.scheduled_for.desc())
         .limit(limit)
     )
