@@ -147,7 +147,17 @@ async def google_callback(
         except httpx.HTTPError:
             pass  # Non-fatal — token still works
 
-    # Upsert calendar connection
+    # Remove all non-Google connections — only one provider at a time
+    others_result = await db.execute(
+        select(CalendarConnection).where(
+            CalendarConnection.workspace_id == workspace.id,
+            CalendarConnection.provider != "google",
+        )
+    )
+    for other in others_result.scalars().all():
+        await db.delete(other)
+
+    # Upsert the Google connection
     existing_result = await db.execute(
         select(CalendarConnection).where(
             CalendarConnection.workspace_id == workspace.id,

@@ -72,7 +72,17 @@ async def oauth_callback(
         if signing_key:
             conn_meta["webhook_signing_key"] = signing_key
 
-        # Mirror into calendar_connections so the wizard's polling endpoint detects it
+        # Remove all non-Calendly connections — only one provider at a time
+        others_result = await db.execute(
+            select(CalendarConnection).where(
+                CalendarConnection.workspace_id == workspace.id,
+                CalendarConnection.provider != "calendly",
+            )
+        )
+        for other in others_result.scalars().all():
+            await db.delete(other)
+
+        # Upsert the Calendly connection
         conn_result = await db.execute(
             select(CalendarConnection).where(
                 CalendarConnection.workspace_id == workspace.id,
@@ -105,8 +115,7 @@ async def oauth_callback(
                 active=True,
             ))
 
-        if not workspace.primary_calendar_provider:
-            workspace.primary_calendar_provider = "calendly"
+        workspace.primary_calendar_provider = "calendly"
 
         await db.commit()
     except CalendlyError as e:
