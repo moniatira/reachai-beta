@@ -398,14 +398,18 @@ class AppointmentItem(BaseModel):
     duration_minutes: int
 
 
-@router.post("/{source_slug}/copy-settings-to/{dest_slug}")
+class ClonePayload(BaseModel):
+    to: str = Field(..., description="Destination workspace slug")
+
+
+@router.post("/{slug}/clone")
 async def copy_workspace_settings(
-    source_slug: str,
-    dest_slug: str,
+    slug: str,
+    payload: ClonePayload,
     db: AsyncSession = Depends(get_db),
     x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
 ):
-    """Admin-only: copy configurable settings and knowledge docs from one workspace to another.
+    """Admin-only: copy configurable settings and knowledge docs to another workspace.
 
     Copies: name, industry, website_url, assistant_name, greeting, tone,
     brand_primary, logo_url, extracted_business_info, services_config,
@@ -416,15 +420,18 @@ async def copy_workspace_settings(
     if not x_admin_key or x_admin_key != settings.admin_api_key:
         raise HTTPException(403, "Admin key required")
 
-    src_result = await db.execute(select(Workspace).where(Workspace.slug == source_slug))
+    src_result = await db.execute(select(Workspace).where(Workspace.slug == slug))
     src = src_result.scalar_one_or_none()
     if not src:
-        raise HTTPException(404, f"Source workspace '{source_slug}' not found")
+        raise HTTPException(404, f"Source workspace '{slug}' not found")
 
-    dst_result = await db.execute(select(Workspace).where(Workspace.slug == dest_slug))
+    dst_result = await db.execute(select(Workspace).where(Workspace.slug == payload.to))
     dst = dst_result.scalar_one_or_none()
     if not dst:
-        raise HTTPException(404, f"Destination workspace '{dest_slug}' not found")
+        raise HTTPException(404, f"Destination workspace '{payload.to}' not found")
+
+    source_slug = slug
+    dest_slug = payload.to
 
     # Copy scalar settings
     dst.name = src.name
