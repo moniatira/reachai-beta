@@ -283,7 +283,13 @@ async def _execute_tool(
                     if conf.join_url:
                         join_url = conf.join_url
                 except Exception as e:
-                    logger.warning("Provider create_booking failed, proceeding anyway: %s", e)
+                    logger.error(
+                        "Provider create_booking failed (provider=%s workspace=%s): %s",
+                        getattr(provider, "PROVIDER_NAME", "unknown"),
+                        workspace.slug,
+                        e,
+                        exc_info=True,
+                    )
 
             # For Calendly direct booking: capture event URI (for dedup) and reschedule URL
             calendly_event_uri = None
