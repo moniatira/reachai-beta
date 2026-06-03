@@ -180,9 +180,8 @@ async def google_callback(
         )
         db.add(new_conn)
 
-    # If workspace has no primary calendar set, make Google the primary
-    if not workspace.primary_calendar_provider:
-        workspace.primary_calendar_provider = "google"
+    # Make Google the primary calendar (newly connected = active choice)
+    workspace.primary_calendar_provider = "google"
 
     await db.commit()
 

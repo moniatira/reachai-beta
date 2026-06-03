@@ -38,19 +38,19 @@ async def get_provider_for_workspace(
     """
     settings = get_settings()
 
-    # Load all calendar connections for this workspace
+    # Load all calendar connections for this workspace, newest first
     result = await db.execute(
         select(CalendarConnection).where(
             CalendarConnection.workspace_id == workspace.id,
             CalendarConnection.active.is_(True),
-        )
+        ).order_by(CalendarConnection.created_at.desc())
     )
     connections = result.scalars().all()
 
     if not connections:
         return None
 
-    # Pick the connection matching workspace's preferred provider, else first
+    # Prefer workspace's explicit primary provider; fall back to most recently connected
     preferred = workspace.primary_calendar_provider
     connection = None
     if preferred:

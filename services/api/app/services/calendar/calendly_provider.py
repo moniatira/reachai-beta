@@ -147,19 +147,32 @@ class CalendlyProvider(CalendarProvider):
             },
         }
 
-        # Fetch event type to include the required location_configuration
+        # Fetch event type to build the required location_configuration
         try:
             et_path = urlparse(request.service_id).path  # /event_types/<id>
             et_data = await _api_get(access_token, et_path)
-            locations = et_data.get("resource", {}).get("locations", [])
+            resource = et_data.get("resource", {})
+            locations = resource.get("locations", [])
+            logger.error(
+                "Calendly event type locations for %s: %r", et_path, locations
+            )
             if locations:
                 loc = locations[0]
-                loc_config: dict = {"kind": loc["kind"]}
-                if loc.get("location"):
-                    loc_config["location"] = loc["location"]
-                body["event"] = {"location_configuration": loc_config}
+                kind = loc.get("kind") or loc.get("type", "")
+                # "ask_invitee" means the invitee provides location — don't set it
+                if kind and kind != "ask_invitee":
+                    loc_config: dict = {"kind": kind}
+                    for field in ("location", "additional_info", "phone_number"):
+                        if loc.get(field):
+                            loc_config[field] = loc[field]
+                    body["event"] = {"location_configuration": loc_config}
+                    logger.error("Calendly booking: using location_configuration=%r", loc_config)
+                else:
+                    logger.error("Calendly booking: skipping location (kind=%r)", kind)
         except Exception as e:
-            logger.warning("Could not fetch event type location config: %s", e)
+            logger.error("Could not fetch event type location config: %s", e, exc_info=True)
+
+        logger.error("Calendly POST /invitees body (redacted): service=%r start=%r", request.service_id, start_time)
 
         try:
             data = await _api_post(access_token, "/invitees", body)
