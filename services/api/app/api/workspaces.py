@@ -17,7 +17,7 @@ from app.core.db import get_db
 from app.core.jwt_utils import get_current_user_optional
 from app.models import Workspace
 from app.models.user import User
-from app.models.workspace import BUSINESS, PENDING, WorkspaceOwner, ChatSession, Booking
+from app.models.workspace import BUSINESS, PENDING, WorkspaceOwner, ChatSession, Booking, KnowledgeDocument
 from app.services.calendly import build_authorize_url
 
 
@@ -398,6 +398,98 @@ class AppointmentItem(BaseModel):
     duration_minutes: int
 
 
+@router.post("/{source_slug}/copy-settings-to/{dest_slug}")
+async def copy_workspace_settings(
+    source_slug: str,
+    dest_slug: str,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+):
+    """Admin-only: copy configurable settings and knowledge docs from one workspace to another.
+
+    Copies: name, industry, website_url, assistant_name, greeting, tone,
+    brand_primary, logo_url, extracted_business_info, services_config,
+    onboarding_step, and all KnowledgeDocuments.
+    Does NOT copy: slug, id, owner, calendar connections, chat sessions, bookings.
+    """
+    settings = get_settings()
+    if not x_admin_key or x_admin_key != settings.admin_api_key:
+        raise HTTPException(403, "Admin key required")
+
+    src_result = await db.execute(select(Workspace).where(Workspace.slug == source_slug))
+    src = src_result.scalar_one_or_none()
+    if not src:
+        raise HTTPException(404, f"Source workspace '{source_slug}' not found")
+
+    dst_result = await db.execute(select(Workspace).where(Workspace.slug == dest_slug))
+    dst = dst_result.scalar_one_or_none()
+    if not dst:
+        raise HTTPException(404, f"Destination workspace '{dest_slug}' not found")
+
+    # Copy scalar settings
+    dst.name = src.name
+    dst.industry = src.industry
+    dst.website_url = src.website_url
+    dst.assistant_name = src.assistant_name
+    dst.greeting = src.greeting
+    dst.tone = src.tone
+    dst.brand_primary = src.brand_primary
+    dst.logo_url = src.logo_url
+    dst.extracted_business_info = src.extracted_business_info
+    dst.services_config = src.services_config
+    dst.onboarding_step = src.onboarding_step
+
+    # Copy knowledge documents
+    docs_result = await db.execute(
+        select(KnowledgeDocument).where(KnowledgeDocument.workspace_id == src.id)
+    )
+    src_docs = docs_result.scalars().all()
+
+    # Delete existing knowledge docs on destination first
+    existing_docs_result = await db.execute(
+        select(KnowledgeDocument).where(KnowledgeDocument.workspace_id == dst.id)
+    )
+    for doc in existing_docs_result.scalars().all():
+        await db.delete(doc)
+
+    # Add copies
+    for doc in src_docs:
+        db.add(KnowledgeDocument(
+            workspace_id=dst.id,
+            source_type=doc.source_type,
+            source_name=doc.source_name,
+            content=doc.content,
+            char_count=doc.char_count,
+        ))
+
+    await db.commit()
+    return {
+        "ok": True,
+        "copied_from": source_slug,
+        "copied_to": dest_slug,
+        "knowledge_docs_copied": len(src_docs),
+    }
+
+
+@router.delete("/{slug}")
+async def delete_workspace(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+):
+    """Admin-only: permanently delete a workspace and all its data."""
+    settings = get_settings()
+    if not x_admin_key or x_admin_key != settings.admin_api_key:
+        raise HTTPException(403, "Admin key required")
+    result = await db.execute(select(Workspace).where(Workspace.slug == slug))
+    workspace = result.scalar_one_or_none()
+    if not workspace:
+        raise HTTPException(404, "Workspace not found")
+    await db.delete(workspace)
+    await db.commit()
+    return {"ok": True, "deleted": slug}
+
+
 @router.delete("/{slug}/appointments")
 async def delete_all_workspace_appointments(
     slug: str,
@@ -420,6 +512,40 @@ async def delete_all_workspace_appointments(
         await db.delete(b)
     await db.commit()
     return {"ok": True, "deleted": len(bookings)}
+
+
+@router.delete("/{slug}/appointments/{booking_id}")
+async def delete_appointment(
+    slug: str,
+    booking_id: str,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+    user_id: str | None = Depends(get_current_user_optional),
+):
+    """Delete a single booking record. Requires admin key or workspace owner."""
+    settings = get_settings()
+    is_admin = x_admin_key and x_admin_key == settings.admin_api_key
+    result = await db.execute(select(Workspace).where(Workspace.slug == slug))
+    workspace = result.scalar_one_or_none()
+    if not workspace:
+        raise HTTPException(404, "Workspace not found")
+    if not is_admin:
+        if not user_id:
+            raise HTTPException(401, "Authentication required")
+        owner_check = await db.execute(
+            select(WorkspaceOwner).where(
+                WorkspaceOwner.workspace_id == workspace.id,
+                WorkspaceOwner.user_id == user_id,
+            )
+        )
+        if not owner_check.scalar_one_or_none():
+            raise HTTPException(403, "Access denied")
+    booking = await db.get(Booking, booking_id)
+    if not booking or booking.workspace_id != workspace.id:
+        raise HTTPException(404, "Appointment not found")
+    await db.delete(booking)
+    await db.commit()
+    return {"ok": True}
 
 
 @router.get("/{slug}/appointments", response_model=list[AppointmentItem])
