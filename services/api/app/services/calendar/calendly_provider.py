@@ -15,7 +15,7 @@ from app.services.calendar.base import (
     CalendarService,
     CalendarSlot,
 )
-from app.services.calendly import _api_get, refresh_access_token, CalendlyError
+from app.services.calendly import _api_get, _api_post, refresh_access_token, CalendlyError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,7 +37,7 @@ class CalendlyProvider(CalendarProvider):
 
     @property
     def supports_real_time_booking(self) -> bool:
-        return False
+        return True
 
     async def _get_access_token(self) -> str:
         """Return a valid access token, refreshing from Calendly if expired."""
@@ -131,36 +131,39 @@ class CalendlyProvider(CalendarProvider):
         return slots
 
     async def create_booking(self, request: BookingRequest) -> BookingConfirmation:
-        """Calendly doesn't support direct API booking — return a pre-auth scheduling link.
+        """Create a Calendly booking directly via POST /invitees (standard plan required)."""
+        access_token = await self._get_access_token()
+        slot_utc = request.slot.start.astimezone(timezone.utc)
+        start_time = slot_utc.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
 
-        If the slot's provider_metadata already has a scheduling_url (slot-specific),
-        use that directly. Otherwise build one from the service's base booking_url +
-        the slot start time so the customer lands on Calendly with that exact slot
-        pre-selected.
-        """
-        scheduling_url = request.slot.provider_metadata.get("scheduling_url")
-        if not scheduling_url:
-            services = await self.list_services()
-            service = next((s for s in services if s.id == request.service_id), None)
-            base_url = service.booking_url if service else None
+        try:
+            data = await _api_post(
+                access_token,
+                "/invitees",
+                {
+                    "event_type": request.service_id,
+                    "start_time": start_time,
+                    "invitee": {
+                        "name": request.customer_name,
+                        "email": request.customer_email,
+                        "timezone": "UTC",
+                    },
+                },
+            )
+        except Exception as e:
+            raise CalendarProviderError(f"Calendly direct booking failed: {e}")
 
-            if not base_url:
-                raise CalendarProviderError("No Calendly scheduling URL available")
-
-            # Append the slot time so Calendly pre-selects it for the customer
-            slot_utc = request.slot.start.astimezone(timezone.utc)
-            time_str = slot_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
-            scheduling_url = f"{base_url}/{time_str}"
-
-        name_encoded = request.customer_name.replace(" ", "%20")
-        prefilled = f"{scheduling_url}?name={name_encoded}&email={request.customer_email}"
+        resource = data.get("resource", {})
+        event_uri = resource.get("event", "")
+        invitee_uri = resource.get("uri", f"calendly-invitee-{slot_utc.isoformat()}")
+        reschedule_url = resource.get("reschedule_url")
 
         return BookingConfirmation(
-            booking_id=f"calendly-pending-{request.slot.start.isoformat()}",
-            confirmation_url=prefilled,
+            booking_id=event_uri or invitee_uri,
+            confirmation_url=reschedule_url,
             join_url=None,
             confirmed_at=datetime.now(timezone.utc),
-            requires_customer_confirmation=True,
+            requires_customer_confirmation=False,
         )
 
     async def health_check(self) -> bool:

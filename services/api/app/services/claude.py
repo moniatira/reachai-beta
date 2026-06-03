@@ -78,10 +78,9 @@ TOOLS: list[dict] = [
     {
         "name": "confirm_booking",
         "description": (
-            "Confirm an appointment. Behaviour depends on the connected calendar:\n"
-            "• Calendly: returns a pre-filled `calendly_link` the customer must click to complete the booking on Calendly. "
-            "Share this link exactly as returned and tell the customer they will receive a confirmation email once they confirm on Calendly.\n"
-            "• Google / Outlook: creates the event directly and sends a confirmation email. Booking is fully done — no link needed.\n"
+            "Confirm an appointment. Creates the booking directly on the connected calendar "
+            "(Calendly, Google, or Outlook) and sends the customer a confirmation email with a calendar invite. "
+            "The booking is fully done — tell the customer they are booked and a confirmation email is on its way. "
             "You MUST have the customer's name and email before calling this. Phone is encouraged but optional."
         ),
         "input_schema": {
@@ -263,58 +262,9 @@ async def _execute_tool(
 
             provider = await get_provider_for_workspace(workspace, db)
             join_url = None
+            conf = None
 
-            # Detect Calendly via provider OR legacy CalendlyToken (no CalendarConnection yet)
-            is_calendly = (
-                (provider is not None and not getattr(provider, "supports_real_time_booking", True))
-                or (provider is None and workspace.calendly_token is not None)
-            )
-
-            # Calendly: cannot create events server-side — return a pre-filled
-            # booking link for the customer to complete. A webhook fires when
-            # they confirm, which saves the booking and sends the email.
-            if is_calendly:
-                try:
-                    if provider:
-                        slot = CalendarSlot(
-                            start=scheduled_for,
-                            end=scheduled_for + timedelta(minutes=duration_minutes),
-                            service_id=service_id,
-                            provider_metadata={},
-                        )
-                        req = BookingRequest(
-                            service_id=service_id,
-                            slot=slot,
-                            customer_name=customer_name,
-                            customer_email=customer_email,
-                            customer_phone=customer_phone,
-                        )
-                        conf = await provider.create_booking(req)
-                        calendly_link = conf.confirmation_url
-                    else:
-                        # Legacy path: CalendlyToken exists but no CalendarConnection
-                        from app.services.calendly import list_event_types
-                        event_types = await list_event_types(db, workspace)
-                        svc = next((et for et in event_types if et["uri"] == service_id), None)
-                        if not svc or not svc.get("scheduling_url"):
-                            return {"error": "Could not find Calendly booking URL for this service."}
-                        slot_utc = scheduled_for.astimezone(timezone.utc)
-                        time_str = slot_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
-                        name_encoded = customer_name.replace(" ", "%20")
-                        calendly_link = (
-                            f"{svc['scheduling_url']}/{time_str}"
-                            f"?name={name_encoded}&email={customer_email}"
-                        )
-                    return {
-                        "requires_calendly_confirmation": True,
-                        "calendly_link": calendly_link,
-                    }
-                except Exception as e:
-                    logger.warning("Failed to generate Calendly booking link: %s", e)
-                    return {"error": "Could not generate booking link — please try again."}
-
-            # Google / Outlook: create the calendar event directly
-            if provider and getattr(provider, "supports_real_time_booking", False):
+            if provider:
                 try:
                     slot = CalendarSlot(
                         start=scheduled_for,
@@ -335,6 +285,13 @@ async def _execute_tool(
                 except Exception as e:
                     logger.warning("Provider create_booking failed, proceeding anyway: %s", e)
 
+            # For Calendly direct booking: capture event URI (for dedup) and reschedule URL
+            calendly_event_uri = None
+            reschedule_url: str | None = None
+            if conf and getattr(provider, "PROVIDER_NAME", "") == "calendly":
+                calendly_event_uri = conf.booking_id  # scheduled_event URI
+                reschedule_url = conf.confirmation_url or None
+
             # Save booking record
             booking = Booking(
                 workspace_id=workspace.id,
@@ -343,6 +300,7 @@ async def _execute_tool(
                 customer_email=customer_email,
                 customer_phone=customer_phone,
                 event_type_uri=service_id,
+                event_uri=calendly_event_uri,  # set for Calendly direct; None for Google/Outlook
                 service_name=service_name,
                 scheduled_for=scheduled_for,
                 duration_minutes=duration_minutes,
@@ -350,19 +308,18 @@ async def _execute_tool(
             db.add(booking)
             await db.flush()
 
-            # Build reschedule links for the confirmation email.
-            # Look up the service's booking URL server-side — never expose it to Claude.
+            # Reschedule URL for email: from Calendly API response, or service lookup for Google/Outlook
             chat_url = workspace.website_url or None
-            reschedule_url: str | None = None
-            try:
-                _provider = await get_provider_for_workspace(workspace, db)
-                if _provider:
-                    _services = await _provider.list_services()
-                    _svc = next((s for s in _services if s.id == service_id), None)
-                    if _svc and _svc.booking_url:
-                        reschedule_url = _svc.booking_url
-            except Exception:
-                pass
+            if not reschedule_url:
+                try:
+                    _provider = await get_provider_for_workspace(workspace, db)
+                    if _provider:
+                        _services = await _provider.list_services()
+                        _svc = next((s for s in _services if s.id == service_id), None)
+                        if _svc and _svc.booking_url:
+                            reschedule_url = _svc.booking_url
+                except Exception:
+                    pass
 
             # Send confirmation email with .ics
             email_sent = False

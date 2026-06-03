@@ -139,6 +139,21 @@ async def _api_get(access_token: str, path: str, params: dict | None = None) -> 
         return resp.json()
 
 
+async def _api_post(access_token: str, path: str, json_body: dict) -> dict:
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            f"{settings.calendly_api_base}{path}",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json=json_body,
+        )
+        if resp.status_code not in (200, 201):
+            raise CalendlyError(f"Calendly API error: {resp.status_code} {resp.text[:400]}")
+        return resp.json()
+
+
 async def get_current_user(access_token: str) -> dict:
     data = await _api_get(access_token, "/users/me")
     return data["resource"]

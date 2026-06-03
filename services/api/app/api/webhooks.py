@@ -158,6 +158,17 @@ async def _handle_invitee_created(
         end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
         duration_minutes = max(1, int((end_dt - scheduled_for).total_seconds() / 60))
 
+    # Deduplication: skip if this event was already saved by direct booking API
+    existing = await db.execute(
+        select(Booking).where(
+            Booking.workspace_id == workspace.id,
+            Booking.event_uri == event_uri,
+        )
+    )
+    if existing.scalar_one_or_none():
+        logger.info("Calendly webhook: event %s already saved — skipping", event_uri)
+        return
+
     # Save booking record — event_uri marks this as webhook-confirmed
     booking = Booking(
         workspace_id=workspace.id,
