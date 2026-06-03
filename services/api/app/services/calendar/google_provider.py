@@ -261,7 +261,7 @@ class GoogleCalendarProvider(CalendarProvider):
         """Quick API call to verify the connection works."""
         try:
             cal_service = self._calendar_service()
-            cal_service.calendars().get(calendarId="primary").execute()
+            cal_service.events().list(calendarId="primary", maxResults=1).execute()
             return True
         except Exception as e:
             logger.warning("Google health check failed: %s", e)
