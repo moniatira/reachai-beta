@@ -81,9 +81,9 @@ async def calendly_webhook(request: Request, db: AsyncSession = Depends(get_db))
             CalendarConnection.account_id == organizer_uri,
             CalendarConnection.provider == "calendly",
             CalendarConnection.active.is_(True),
-        )
+        ).order_by(CalendarConnection.created_at.desc()).limit(1)
     )
-    connection = conn_result.scalar_one_or_none()
+    connection = conn_result.scalars().first()
 
     # Prefer the per-connection key stored at OAuth time; fall back to global env var
     signing_key = ""

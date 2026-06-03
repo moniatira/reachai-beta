@@ -58,7 +58,7 @@ async def get_provider_for_workspace(
     if connection is None:
         connection = connections[0]
 
-    return _instantiate(connection, settings)
+    return _instantiate(connection, settings, db=db)
 
 
 def _instantiate(
