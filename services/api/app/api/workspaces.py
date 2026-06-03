@@ -398,6 +398,30 @@ class AppointmentItem(BaseModel):
     duration_minutes: int
 
 
+@router.delete("/{slug}/appointments")
+async def delete_all_workspace_appointments(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+):
+    """Admin-only: delete all booking records for a workspace."""
+    settings = get_settings()
+    if not x_admin_key or x_admin_key != settings.admin_api_key:
+        raise HTTPException(403, "Admin key required")
+    result = await db.execute(select(Workspace).where(Workspace.slug == slug))
+    workspace = result.scalar_one_or_none()
+    if not workspace:
+        raise HTTPException(404, "Workspace not found")
+    bookings_result = await db.execute(
+        select(Booking).where(Booking.workspace_id == workspace.id)
+    )
+    bookings = bookings_result.scalars().all()
+    for b in bookings:
+        await db.delete(b)
+    await db.commit()
+    return {"ok": True, "deleted": len(bookings)}
+
+
 @router.get("/{slug}/appointments", response_model=list[AppointmentItem])
 async def get_workspace_appointments(
     slug: str,
