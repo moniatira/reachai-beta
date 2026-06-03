@@ -164,7 +164,7 @@ async def disconnect_provider(
             CalendarConnection.provider == provider,
         )
     )
-    conn = result.scalar_one_or_none()
+    conns = result.scalars().all()
 
     # For Calendly, also wipe the CalendlyToken so next OAuth shows fresh consent.
     # Do this before the 404 check — the token may be orphaned (conn already deleted).
@@ -176,14 +176,15 @@ async def disconnect_provider(
         if token:
             await db.delete(token)
 
-    if not conn:
+    if not conns:
         # Token-only cleanup path — commit what we deleted and return success
         if workspace.primary_calendar_provider == provider:
             workspace.primary_calendar_provider = None
         await db.commit()
         return {"ok": True, "disconnected": provider, "note": "no CalendarConnection found, CalendlyToken cleared"}
 
-    await db.delete(conn)
+    for conn in conns:
+        await db.delete(conn)
 
     # If this was the primary provider, clear it (or fall back to next available)
     if workspace.primary_calendar_provider == provider:
