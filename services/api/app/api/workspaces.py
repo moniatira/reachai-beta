@@ -398,14 +398,10 @@ class AppointmentItem(BaseModel):
     duration_minutes: int
 
 
-class ClonePayload(BaseModel):
-    to: str = Field(..., description="Destination workspace slug")
-
-
-@router.post("/{slug}/clone")
+@router.get("/{slug}/clone")
 async def copy_workspace_settings(
     slug: str,
-    payload: ClonePayload,
+    to: str,
     db: AsyncSession = Depends(get_db),
     x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
 ):
@@ -425,13 +421,13 @@ async def copy_workspace_settings(
     if not src:
         raise HTTPException(404, f"Source workspace '{slug}' not found")
 
-    dst_result = await db.execute(select(Workspace).where(Workspace.slug == payload.to))
+    dst_result = await db.execute(select(Workspace).where(Workspace.slug == to))
     dst = dst_result.scalar_one_or_none()
     if not dst:
-        raise HTTPException(404, f"Destination workspace '{payload.to}' not found")
+        raise HTTPException(404, f"Destination workspace '{to}' not found")
 
     source_slug = slug
-    dest_slug = payload.to
+    dest_slug = to
 
     # Copy scalar settings
     dst.name = src.name
