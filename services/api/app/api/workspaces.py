@@ -398,6 +398,48 @@ class AppointmentItem(BaseModel):
     duration_minutes: int
 
 
+@router.get("/{slug}/assign-owner")
+async def assign_workspace_owner(
+    slug: str,
+    owner_email: str,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+):
+    """Admin-only: link an existing user (by email) as owner of a workspace.
+
+    Pass owner_email as a query param: ?owner_email=user@example.com
+    The user must have logged in at least once so their account exists.
+    """
+    settings = get_settings()
+    if not x_admin_key or x_admin_key != settings.admin_api_key:
+        raise HTTPException(403, "Admin key required")
+
+    ws_result = await db.execute(select(Workspace).where(Workspace.slug == slug))
+    workspace = ws_result.scalar_one_or_none()
+    if not workspace:
+        raise HTTPException(404, f"Workspace '{slug}' not found")
+
+    user_result = await db.execute(select(User).where(User.email == owner_email))
+    user = user_result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(404, f"No user with email '{owner_email}'. They must log in at least once first.")
+
+    existing = await db.execute(
+        select(WorkspaceOwner).where(
+            WorkspaceOwner.workspace_id == workspace.id,
+            WorkspaceOwner.user_id == user.id,
+        )
+    )
+    if not existing.scalar_one_or_none():
+        db.add(WorkspaceOwner(user_id=user.id, workspace_id=workspace.id, role="owner"))
+
+    workspace.owner_email = owner_email
+    workspace.owner_user_id = user.id
+
+    await db.commit()
+    return {"ok": True, "workspace": slug, "owner_email": owner_email}
+
+
 @router.get("/{slug}/clone")
 async def copy_workspace_settings(
     slug: str,
