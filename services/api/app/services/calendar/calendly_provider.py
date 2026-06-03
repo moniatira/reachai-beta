@@ -137,42 +137,36 @@ class CalendlyProvider(CalendarProvider):
         slot_utc = request.slot.start.astimezone(timezone.utc)
         start_time = slot_utc.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
 
+        invitee_timezone = getattr(request, "customer_timezone", None) or "America/Chicago"
+
         body: dict = {
             "event_type": request.service_id,
             "start_time": start_time,
             "invitee": {
                 "name": request.customer_name,
                 "email": request.customer_email,
-                "timezone": "UTC",
+                "timezone": invitee_timezone,
             },
         }
 
-        # Fetch event type to build the required location_configuration
+        # Fetch event type location and add as "location" (not "location_configuration")
         try:
             et_path = urlparse(request.service_id).path  # /event_types/<id>
             et_data = await _api_get(access_token, et_path)
             resource = et_data.get("resource", {})
             locations = resource.get("locations", [])
-            logger.error(
-                "Calendly event type locations for %s: %r", et_path, locations
-            )
             if locations:
                 loc = locations[0]
                 kind = loc.get("kind") or loc.get("type", "")
-                # "ask_invitee" means the invitee provides location — don't set it
+                # "ask_invitee" means the invitee provides location — skip
                 if kind and kind != "ask_invitee":
-                    loc_config: dict = {"kind": kind}
+                    loc_obj: dict = {"kind": kind}
                     for field in ("location", "additional_info", "phone_number"):
                         if loc.get(field):
-                            loc_config[field] = loc[field]
-                    body["event"] = {"location_configuration": loc_config}
-                    logger.error("Calendly booking: using location_configuration=%r", loc_config)
-                else:
-                    logger.error("Calendly booking: skipping location (kind=%r)", kind)
+                            loc_obj[field] = loc[field]
+                    body["location"] = loc_obj
         except Exception as e:
             logger.error("Could not fetch event type location config: %s", e, exc_info=True)
-
-        logger.error("Calendly POST /invitees body (redacted): service=%r start=%r", request.service_id, start_time)
 
         try:
             data = await _api_post(access_token, "/invitees", body)
