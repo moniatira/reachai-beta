@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.models import ChatSession, Workspace
+from app.models.calendar_connection import CalendarConnection
 from app.services.claude import chat_turn
 
 
@@ -44,8 +45,17 @@ async def chat(
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found or not active")
 
-    await db.refresh(workspace, ["calendly_token"])
-    if not workspace.calendly_token:
+    conn_result = await db.execute(
+        select(CalendarConnection).where(
+            CalendarConnection.workspace_id == workspace.id,
+            CalendarConnection.active.is_(True),
+        ).limit(1)
+    )
+    has_calendar = conn_result.scalar_one_or_none() is not None
+    if not has_calendar:
+        await db.refresh(workspace, ["calendly_token"])
+        has_calendar = workspace.calendly_token is not None
+    if not has_calendar:
         raise HTTPException(
             status_code=400,
             detail=f"{workspace.name} hasn't connected their calendar yet.",
