@@ -120,6 +120,7 @@ async def _handle_invitee_created(
     customer_email = data.get("email", "")
     reschedule_url = data.get("reschedule_url")
     event_uri = data.get("event", "")
+    invitee_tz = data.get("timezone")  # IANA timezone from the invitee object
 
     if not customer_email or not event_uri:
         logger.warning("Calendly webhook: missing email or event URI — skipping")
@@ -147,6 +148,9 @@ async def _handle_invitee_created(
     end_str = event_data.get("end_time")
     service_name = event_data.get("name", "Appointment")
     event_type_uri = event_data.get("event_type", "")
+
+    from app.services.calendar.location_handler import render_location
+    location_info = render_location(event_data.get("location") or {})
 
     if not start_str:
         logger.warning("Calendly webhook: event has no start_time — skipping")
@@ -199,6 +203,8 @@ async def _handle_invitee_created(
             duration_minutes=duration_minutes,
             reschedule_url=reschedule_url,
             chat_url=chat_url,
+            location_info=location_info,
+            invitee_tz=invitee_tz,
         )
         await send_email(
             to=customer_email,
