@@ -132,24 +132,37 @@ class CalendlyProvider(CalendarProvider):
 
     async def create_booking(self, request: BookingRequest) -> BookingConfirmation:
         """Create a Calendly booking directly via POST /invitees (standard plan required)."""
+        from urllib.parse import urlparse
         access_token = await self._get_access_token()
         slot_utc = request.slot.start.astimezone(timezone.utc)
         start_time = slot_utc.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
 
+        body: dict = {
+            "event_type": request.service_id,
+            "start_time": start_time,
+            "invitee": {
+                "name": request.customer_name,
+                "email": request.customer_email,
+                "timezone": "UTC",
+            },
+        }
+
+        # Fetch event type to include the required location_configuration
         try:
-            data = await _api_post(
-                access_token,
-                "/invitees",
-                {
-                    "event_type": request.service_id,
-                    "start_time": start_time,
-                    "invitee": {
-                        "name": request.customer_name,
-                        "email": request.customer_email,
-                        "timezone": "UTC",
-                    },
-                },
-            )
+            et_path = urlparse(request.service_id).path  # /event_types/<id>
+            et_data = await _api_get(access_token, et_path)
+            locations = et_data.get("resource", {}).get("locations", [])
+            if locations:
+                loc = locations[0]
+                loc_config: dict = {"kind": loc["kind"]}
+                if loc.get("location"):
+                    loc_config["location"] = loc["location"]
+                body["event"] = {"location_configuration": loc_config}
+        except Exception as e:
+            logger.warning("Could not fetch event type location config: %s", e)
+
+        try:
+            data = await _api_post(access_token, "/invitees", body)
         except Exception as e:
             raise CalendarProviderError(f"Calendly direct booking failed: {e}")
 
