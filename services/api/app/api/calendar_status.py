@@ -21,6 +21,8 @@ from app.models.calendar_connection import CalendarConnection
 from app.models.workspace import WorkspaceOwner, CalendlyToken
 from app.services.calendar import PROVIDER_NAMES, list_connections_for_workspace
 from app.services.calendar.registry import _instantiate
+from app.services.calendly import _api_get
+from app.core.security import decrypt_token
 
 
 logger = logging.getLogger(__name__)
@@ -200,3 +202,54 @@ async def disconnect_provider(
 
     await db.commit()
     return {"ok": True, "disconnected": provider}
+
+
+@router.get("/debug-event-types/{slug}")
+async def debug_event_types(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+):
+    """Admin-only: fetch raw Calendly event types including full location config."""
+    settings = get_settings()
+    if not x_admin_key or x_admin_key != settings.admin_api_key:
+        raise HTTPException(403, "Admin key required")
+
+    result = await db.execute(select(Workspace).where(Workspace.slug == slug))
+    workspace = result.scalar_one_or_none()
+    if not workspace:
+        raise HTTPException(404, "Workspace not found")
+
+    conn_result = await db.execute(
+        select(CalendarConnection).where(
+            CalendarConnection.workspace_id == workspace.id,
+            CalendarConnection.provider == "calendly",
+            CalendarConnection.active.is_(True),
+        ).limit(1)
+    )
+    conn = conn_result.scalars().first()
+    if not conn:
+        raise HTTPException(404, "No active Calendly connection for this workspace")
+
+    access_token = decrypt_token(conn.access_token_enc)
+    data = await _api_get(access_token, "/event_types", params={"user": conn.account_id, "active": "true"})
+
+    # For each event type, fetch full detail including locations
+    detailed = []
+    for et in data.get("collection", []):
+        from urllib.parse import urlparse
+        et_path = urlparse(et["uri"]).path
+        try:
+            detail = await _api_get(access_token, et_path)
+            resource = detail.get("resource", et)
+        except Exception:
+            resource = et
+        detailed.append({
+            "uri": et["uri"],
+            "name": et["name"],
+            "duration": et.get("duration"),
+            "locations": resource.get("locations", []),
+            "scheduling_url": et.get("scheduling_url"),
+        })
+
+    return {"event_types": detailed}
