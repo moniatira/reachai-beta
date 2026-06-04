@@ -22,6 +22,22 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+    import os
+    from alembic.config import Config
+    from alembic import command as alembic_command
+
+    def _run_migrations():
+        ini_path = os.path.join(os.path.dirname(__file__), "..", "..", "alembic.ini")
+        cfg = Config(os.path.abspath(ini_path))
+        alembic_command.upgrade(cfg, "head")
+
+    try:
+        await asyncio.to_thread(_run_migrations)
+        logger.info("Database migrations applied")
+    except Exception as e:
+        logger.error("Migration failed — continuing anyway: %s", e)
+
     logger.info("ReachAI API starting · environment=%s", settings.environment)
     logger.info("CORS origins: %s", settings.cors_origins)
     yield
