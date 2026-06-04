@@ -259,6 +259,25 @@ class GoogleCalendarProvider(CalendarProvider):
             requires_customer_confirmation=False,  # Google bookings are instant
         )
 
+    async def cancel_booking(self, provider_event_id: str) -> bool:
+        """Delete the Google Calendar event."""
+        try:
+            cal_service = self._calendar_service()
+            calendar_ids = (
+                self.connection.connection_metadata.get("calendar_ids", ["primary"])
+                if self.connection.connection_metadata else ["primary"]
+            )
+            cal_service.events().delete(
+                calendarId=calendar_ids[0],
+                eventId=provider_event_id,
+                sendUpdates="all",
+            ).execute()
+            logger.info("Deleted Google Calendar event %s", provider_event_id)
+            return True
+        except Exception as e:
+            logger.error("Google event deletion failed for %s: %s", provider_event_id, e)
+            return False
+
     async def health_check(self) -> bool:
         """Quick API call to verify the connection works."""
         try:

@@ -291,11 +291,10 @@ async def _execute_tool(
                         exc_info=True,
                     )
 
-            # For Calendly direct booking: capture event URI (for dedup) and reschedule URL
-            calendly_event_uri = None
+            # Capture provider event ID and reschedule URL
+            provider_event_id = conf.booking_id if conf else None  # Google event ID or Calendly event URI
             reschedule_url: str | None = None
             if conf and getattr(provider, "PROVIDER_NAME", "") == "calendly":
-                calendly_event_uri = conf.booking_id  # scheduled_event URI
                 reschedule_url = conf.confirmation_url or None
 
             # Save booking record
@@ -306,7 +305,7 @@ async def _execute_tool(
                 customer_email=customer_email,
                 customer_phone=customer_phone,
                 event_type_uri=service_id,
-                event_uri=calendly_event_uri,  # set for Calendly direct; None for Google/Outlook
+                event_uri=provider_event_id,  # Calendly event URI or Google Calendar event ID
                 service_name=service_name,
                 scheduled_for=scheduled_for,
                 duration_minutes=duration_minutes,

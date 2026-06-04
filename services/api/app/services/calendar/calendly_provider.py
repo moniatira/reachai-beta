@@ -186,6 +186,28 @@ class CalendlyProvider(CalendarProvider):
             requires_customer_confirmation=False,
         )
 
+    async def cancel_booking(self, provider_event_id: str) -> bool:
+        """Cancel a Calendly scheduled event via the cancellation API.
+
+        provider_event_id is the full scheduled_event URI, e.g.
+        https://api.calendly.com/scheduled_events/{uuid}
+        """
+        try:
+            from urllib.parse import urlparse
+            access_token = await self._get_access_token()
+            # Extract path: /scheduled_events/{uuid}
+            path = urlparse(provider_event_id).path
+            await _api_post(
+                access_token,
+                f"{path}/cancellation",
+                {"reason": "Cancelled by organizer"},
+            )
+            logger.info("Cancelled Calendly event %s", provider_event_id)
+            return True
+        except Exception as e:
+            logger.error("Calendly event cancellation failed for %s: %s", provider_event_id, e)
+            return False
+
     async def health_check(self) -> bool:
         try:
             access_token = await self._get_access_token()

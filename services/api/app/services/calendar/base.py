@@ -114,6 +114,14 @@ class CalendarProvider(ABC):
     async def create_booking(self, request: BookingRequest) -> BookingConfirmation:
         """Create a booking. Returns confirmation with optional video link."""
 
+    async def cancel_booking(self, provider_event_id: str) -> bool:
+        """Cancel a booking on the provider. Returns True on success.
+
+        Default is a no-op (returns False). Providers that support cancellation
+        override this method.
+        """
+        return False
+
     @abstractmethod
     async def health_check(self) -> bool:
         """Quick test that the connection is working. Used by dashboard.

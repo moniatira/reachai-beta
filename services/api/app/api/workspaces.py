@@ -588,9 +588,22 @@ async def delete_appointment(
     booking = await db.get(Booking, booking_id)
     if not booking or booking.workspace_id != workspace.id:
         raise HTTPException(404, "Appointment not found")
+
+    # Best-effort: cancel on the calendar provider before removing from DB
+    calendar_cancelled = False
+    if booking.event_uri:
+        try:
+            from app.services.calendar.registry import get_provider_for_workspace
+            provider = await get_provider_for_workspace(workspace, db)
+            if provider:
+                calendar_cancelled = await provider.cancel_booking(booking.event_uri)
+        except Exception as e:
+            import logging as _log
+            _log.getLogger(__name__).warning("Could not cancel booking on provider: %s", e)
+
     await db.delete(booking)
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "calendar_cancelled": calendar_cancelled}
 
 
 @router.get("/{slug}/appointments", response_model=list[AppointmentItem])
