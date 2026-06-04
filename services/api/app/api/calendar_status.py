@@ -58,8 +58,10 @@ async def _load_workspace_owner_or_admin(
 
 
 class ConnectionSummary(BaseModel):
+    connection_id: str
     provider: str
     account_email: str | None
+    staff_name: str | None
     is_primary: bool
     healthy: bool
     connect_url: str
@@ -96,12 +98,14 @@ async def calendar_status(
             healthy = False
 
         summaries.append(ConnectionSummary(
+            connection_id=conn.id,
             provider=conn.provider,
             account_email=conn.account_email,
+            staff_name=conn.staff_name,
             is_primary=(conn.provider == workspace.primary_calendar_provider),
             healthy=healthy,
             connect_url=f"{api_base}/v1/{conn.provider}/connect/{slug}",
-            disconnect_url=f"{api_base}/v1/calendar/{slug}/{conn.provider}",
+            disconnect_url=f"{api_base}/v1/calendar/{slug}/connection/{conn.id}",
         ))
 
     return CalendarStatusResponse(
@@ -202,6 +206,45 @@ async def disconnect_provider(
 
     await db.commit()
     return {"ok": True, "disconnected": provider}
+
+
+@router.delete("/{slug}/connection/{connection_id}")
+async def disconnect_connection(
+    slug: str,
+    connection_id: str,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+    user_id: str | None = Depends(get_current_user_optional),
+):
+    """Disconnect a specific calendar connection by ID (supports multi-staff)."""
+    workspace = await _load_workspace_owner_or_admin(slug, db, x_admin_key, user_id)
+
+    result = await db.execute(
+        select(CalendarConnection).where(
+            CalendarConnection.id == connection_id,
+            CalendarConnection.workspace_id == workspace.id,
+        )
+    )
+    conn = result.scalar_one_or_none()
+    if not conn:
+        raise HTTPException(404, "Connection not found")
+
+    provider = conn.provider
+    await db.delete(conn)
+
+    # If this was the primary, fall back to next available connection
+    if workspace.primary_calendar_provider == provider:
+        remaining = await db.execute(
+            select(CalendarConnection).where(
+                CalendarConnection.workspace_id == workspace.id,
+                CalendarConnection.active.is_(True),
+            ).order_by(CalendarConnection.created_at.desc())
+        )
+        next_conn = remaining.scalars().first()
+        workspace.primary_calendar_provider = next_conn.provider if next_conn else None
+
+    await db.commit()
+    return {"ok": True, "disconnected": connection_id}
 
 
 @router.get("/debug-event-types/{slug}")
