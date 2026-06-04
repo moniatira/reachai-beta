@@ -35,7 +35,11 @@ def _state_serializer():
 
 
 @router.get("/connect/{slug}")
-async def google_connect(slug: str, db: AsyncSession = Depends(get_db)):
+async def google_connect(
+    slug: str,
+    staff_name: str | None = Query(None, description="Name of the staff member this calendar belongs to (e.g. 'Aisha')"),
+    db: AsyncSession = Depends(get_db),
+):
     """Start the Google OAuth flow for a workspace."""
     settings = get_settings()
     if not settings.google_client_id:
@@ -50,7 +54,7 @@ async def google_connect(slug: str, db: AsyncSession = Depends(get_db)):
     # Build signed state to prevent CSRF + carry workspace context
     serializer = _state_serializer()
     nonce = secrets.token_urlsafe(16)
-    state = serializer.dumps({"slug": slug, "nonce": nonce})
+    state = serializer.dumps({"slug": slug, "nonce": nonce, "staff_name": staff_name})
 
     params = {
         "client_id": settings.google_client_id,
@@ -89,6 +93,7 @@ async def google_callback(
         return HTMLResponse(_error_page("Invalid or expired authorization state"), status_code=400)
 
     slug = state_data["slug"]
+    staff_name = state_data.get("staff_name")
 
     # Load workspace
     result = await db.execute(select(Workspace).where(Workspace.slug == slug))
@@ -147,35 +152,28 @@ async def google_callback(
         except httpx.HTTPError:
             pass  # Non-fatal — token still works
 
-    # Remove all non-Google connections — only one provider at a time
-    others_result = await db.execute(
-        select(CalendarConnection).where(
-            CalendarConnection.workspace_id == workspace.id,
-            CalendarConnection.provider != "google",
-        )
-    )
-    for other in others_result.scalars().all():
-        await db.delete(other)
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=expires_in)
 
-    # Upsert the Google connection
+    # Upsert: match on account_id (same Google account reconnecting updates in place;
+    # a different account creates a new connection for multi-staff support)
     existing_result = await db.execute(
         select(CalendarConnection).where(
             CalendarConnection.workspace_id == workspace.id,
             CalendarConnection.provider == "google",
+            CalendarConnection.account_id == account_id,
         )
     )
     existing = existing_result.scalar_one_or_none()
-
-    now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(seconds=expires_in)
 
     if existing:
         existing.access_token_enc = encrypt_token(access_token)
         existing.refresh_token_enc = encrypt_token(refresh_token)
         existing.expires_at = expires_at
         existing.account_email = account_email
-        existing.account_id = account_id
         existing.active = True
+        if staff_name:
+            existing.staff_name = staff_name
     else:
         new_conn = CalendarConnection(
             workspace_id=workspace.id,
@@ -186,12 +184,14 @@ async def google_callback(
             account_email=account_email,
             account_id=account_id,
             connection_metadata={"calendar_ids": ["primary"]},
+            staff_name=staff_name,
             active=True,
         )
         db.add(new_conn)
 
-    # Make Google the primary calendar (newly connected = active choice)
-    workspace.primary_calendar_provider = "google"
+    # Set primary provider (first connection wins; can be changed from dashboard)
+    if not workspace.primary_calendar_provider:
+        workspace.primary_calendar_provider = "google"
 
     await db.commit()
 

@@ -38,7 +38,11 @@ def _state_serializer():
 
 
 @router.get("/connect/{slug}")
-async def outlook_connect(slug: str, db: AsyncSession = Depends(get_db)):
+async def outlook_connect(
+    slug: str,
+    staff_name: str | None = Query(None, description="Name of the staff member this calendar belongs to"),
+    db: AsyncSession = Depends(get_db),
+):
     """Start the Outlook OAuth flow."""
     settings = get_settings()
     if not settings.outlook_client_id:
@@ -52,7 +56,7 @@ async def outlook_connect(slug: str, db: AsyncSession = Depends(get_db)):
     tenant = settings.outlook_tenant_id or "common"
     serializer = _state_serializer()
     nonce = secrets.token_urlsafe(16)
-    state = serializer.dumps({"slug": slug, "nonce": nonce})
+    state = serializer.dumps({"slug": slug, "nonce": nonce, "staff_name": staff_name})
 
     params = {
         "client_id": settings.outlook_client_id,
@@ -94,6 +98,7 @@ async def outlook_callback(
         return HTMLResponse(_error_page("Invalid or expired authorization state"), status_code=400)
 
     slug = state_data["slug"]
+    staff_name = state_data.get("staff_name")
     result = await db.execute(select(Workspace).where(Workspace.slug == slug))
     workspace = result.scalar_one_or_none()
     if not workspace:
@@ -149,25 +154,28 @@ async def outlook_callback(
         except httpx.HTTPError:
             pass
 
-    # Upsert connection
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=expires_in)
+
+    # Upsert: match on account_id so the same Microsoft account reconnects in place;
+    # a different account creates a new connection for multi-staff support.
     existing_result = await db.execute(
         select(CalendarConnection).where(
             CalendarConnection.workspace_id == workspace.id,
             CalendarConnection.provider == "outlook",
+            CalendarConnection.account_id == account_id,
         )
     )
     existing = existing_result.scalar_one_or_none()
-
-    now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(seconds=expires_in)
 
     if existing:
         existing.access_token_enc = encrypt_token(access_token)
         existing.refresh_token_enc = encrypt_token(refresh_token)
         existing.expires_at = expires_at
         existing.account_email = account_email
-        existing.account_id = account_id
         existing.active = True
+        if staff_name:
+            existing.staff_name = staff_name
     else:
         new_conn = CalendarConnection(
             workspace_id=workspace.id,
@@ -178,10 +186,12 @@ async def outlook_callback(
             account_email=account_email,
             account_id=account_id,
             connection_metadata={},
+            staff_name=staff_name,
             active=True,
         )
         db.add(new_conn)
 
+    # Set primary provider (first connection wins; can be changed from dashboard)
     if not workspace.primary_calendar_provider:
         workspace.primary_calendar_provider = "outlook"
 

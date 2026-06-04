@@ -279,6 +279,16 @@ class OutlookCalendarProvider(CalendarProvider):
             requires_customer_confirmation=False,
         )
 
+    async def cancel_booking(self, provider_event_id: str) -> bool:
+        """Delete the Outlook Calendar event via Microsoft Graph."""
+        try:
+            await self._graph_request("DELETE", f"/me/events/{provider_event_id}")
+            logger.info("Deleted Outlook Calendar event %s", provider_event_id)
+            return True
+        except Exception as e:
+            logger.error("Outlook event deletion failed for %s: %s", provider_event_id, e)
+            return False
+
     async def health_check(self) -> bool:
         """Quick API call to verify connection."""
         try:

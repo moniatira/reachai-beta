@@ -195,6 +195,10 @@ class Booking(Base):
     duration_minutes: Mapped[int] = mapped_column(Integer)
     service_name: Mapped[str] = mapped_column(String(200))
 
+    # Multi-staff: which staff member and which calendar connection handled this booking
+    staff_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    calendar_connection_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     workspace: Mapped[Workspace] = relationship(back_populates="bookings")

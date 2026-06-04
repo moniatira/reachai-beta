@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
+
 from app.core.db import Base
 
 
@@ -56,6 +57,9 @@ class CalendarConnection(Base):
     # Provider-specific config (calendar IDs, services list, prefs)
     connection_metadata: Mapped[dict | None] = mapped_column("provider_metadata", JSON, nullable=True)
 
+    # Human-readable label for the staff member this calendar belongs to (e.g. "Aisha")
+    staff_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -64,6 +68,8 @@ class CalendarConnection(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("workspace_id", "provider", name="uq_workspace_provider"),
-        Index("ix_calendar_connections_workspace_provider", "workspace_id", "provider"),
+        # Same calendar account can't be added twice to the same workspace,
+        # but multiple different accounts (stylists) can share a provider.
+        UniqueConstraint("workspace_id", "provider", "account_id", name="uq_workspace_provider_account"),
+        Index("ix_calendar_connections_workspace", "workspace_id"),
     )

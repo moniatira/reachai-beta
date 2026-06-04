@@ -72,21 +72,14 @@ async def oauth_callback(
         if signing_key:
             conn_meta["webhook_signing_key"] = signing_key
 
-        # Remove all non-Calendly connections — only one provider at a time
-        others_result = await db.execute(
-            select(CalendarConnection).where(
-                CalendarConnection.workspace_id == workspace.id,
-                CalendarConnection.provider != "calendly",
-            )
-        )
-        for other in others_result.scalars().all():
-            await db.delete(other)
-
-        # Upsert the Calendly connection
+        # Upsert: match on account_id (Calendly user URI) so the same account
+        # reconnecting updates in place; a different Calendly account creates
+        # a new connection for multi-staff support.
         conn_result = await db.execute(
             select(CalendarConnection).where(
                 CalendarConnection.workspace_id == workspace.id,
                 CalendarConnection.provider == "calendly",
+                CalendarConnection.account_id == calendly_token.calendly_user_uri,
             )
         )
         existing_conn = conn_result.scalar_one_or_none()
@@ -112,10 +105,14 @@ async def oauth_callback(
                 account_email=calendly_token.calendly_email,
                 account_id=calendly_token.calendly_user_uri,
                 connection_metadata=conn_meta,
+                # Calendly: use email as staff name until the owner sets a custom one
+                staff_name=calendly_token.calendly_email,
                 active=True,
             ))
 
-        workspace.primary_calendar_provider = "calendly"
+        # Set primary provider (first connection wins; can be changed from dashboard)
+        if not workspace.primary_calendar_provider:
+            workspace.primary_calendar_provider = "calendly"
 
         await db.commit()
     except CalendlyError as e:

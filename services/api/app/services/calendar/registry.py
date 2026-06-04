@@ -28,17 +28,14 @@ PROVIDER_NAMES = {"calendly", "google", "outlook"}
 async def get_provider_for_workspace(
     workspace: Workspace, db: AsyncSession
 ) -> CalendarProvider | None:
-    """Return the calendar provider for this workspace, or None if no calendar
-    is connected.
+    """Return the default calendar provider for this workspace, or None if none connected.
 
-    Order of preference:
+    Preference order:
       1. workspace.primary_calendar_provider (explicit choice)
-      2. First active CalendarConnection on the workspace (fallback)
-      3. Legacy CalendlyToken (for workspaces predating Day 3 migration)
+      2. Most recently connected active CalendarConnection (fallback)
     """
     settings = get_settings()
 
-    # Load all calendar connections for this workspace, newest first
     result = await db.execute(
         select(CalendarConnection).where(
             CalendarConnection.workspace_id == workspace.id,
@@ -50,7 +47,6 @@ async def get_provider_for_workspace(
     if not connections:
         return None
 
-    # Prefer workspace's explicit primary provider; fall back to most recently connected
     preferred = workspace.primary_calendar_provider
     connection = None
     if preferred:
@@ -59,6 +55,54 @@ async def get_provider_for_workspace(
         connection = connections[0]
 
     return _instantiate(connection, settings, db=db)
+
+
+async def get_provider_by_connection_id(
+    connection_id: str, db: AsyncSession
+) -> CalendarProvider | None:
+    """Return the provider for a specific CalendarConnection ID.
+
+    Used when booking with a specific staff member — the connection_id
+    comes from list_staff / find_available_slots slot metadata.
+    """
+    settings = get_settings()
+    result = await db.execute(
+        select(CalendarConnection).where(
+            CalendarConnection.id == connection_id,
+            CalendarConnection.active.is_(True),
+        )
+    )
+    connection = result.scalar_one_or_none()
+    if not connection:
+        return None
+    return _instantiate(connection, settings, db=db)
+
+
+async def get_all_providers_for_workspace(
+    workspace: Workspace, db: AsyncSession
+) -> list[tuple[CalendarConnection, CalendarProvider]]:
+    """Return all active (connection, provider) pairs for a workspace.
+
+    Used to aggregate availability across multiple staff members.
+    Returns pairs sorted by staff_name (nulls last), then created_at.
+    """
+    settings = get_settings()
+    result = await db.execute(
+        select(CalendarConnection).where(
+            CalendarConnection.workspace_id == workspace.id,
+            CalendarConnection.active.is_(True),
+        ).order_by(CalendarConnection.staff_name.nullslast(), CalendarConnection.created_at)
+    )
+    connections = result.scalars().all()
+
+    pairs = []
+    for conn in connections:
+        try:
+            provider = _instantiate(conn, settings, db=db)
+            pairs.append((conn, provider))
+        except CalendarProviderError as e:
+            logger.warning("Skipping connection %s: %s", conn.id, e)
+    return pairs
 
 
 def _instantiate(
@@ -100,6 +144,6 @@ async def list_connections_for_workspace(
         select(CalendarConnection).where(
             CalendarConnection.workspace_id == workspace_id,
             CalendarConnection.active.is_(True),
-        ).order_by(CalendarConnection.created_at)
+        ).order_by(CalendarConnection.staff_name.nullslast(), CalendarConnection.created_at)
     )
     return list(result.scalars().all())

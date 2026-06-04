@@ -26,8 +26,13 @@ from app.core.config import get_settings
 from app.models import Workspace, Booking
 from app.models.workspace import KnowledgeDocument
 from app.prompts.booking import build_system_prompt
+from app.models.calendar_connection import CalendarConnection
 from app.services.calendar.base import BookingRequest, CalendarSlot
-from app.services.calendar.registry import get_provider_for_workspace
+from app.services.calendar.registry import (
+    get_all_providers_for_workspace,
+    get_provider_by_connection_id,
+    get_provider_for_workspace,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +43,16 @@ MIN_ADVANCE_HOURS = 24
 
 
 TOOLS: list[dict] = [
+    {
+        "name": "list_staff",
+        "description": (
+            "Get the list of staff members who can take bookings (e.g. stylists, doctors, consultants). "
+            "Call this at the start of a booking conversation if the business has multiple people. "
+            "If only one staff member is returned, skip asking about staff and go straight to list_services. "
+            "If multiple are returned, ask the customer who they'd like to book with before finding slots."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
     {
         "name": "list_services",
         "description": (
@@ -61,6 +76,10 @@ TOOLS: list[dict] = [
                 "service_id": {
                     "type": "string",
                     "description": "The service ID (URI) from list_services",
+                },
+                "staff_member_id": {
+                    "type": "string",
+                    "description": "Connection ID from list_staff. Omit to get slots across all staff (each slot will include staff_name and staff_member_id).",
                 },
                 "start_date": {
                     "type": "string",
@@ -105,6 +124,10 @@ TOOLS: list[dict] = [
                     "type": "integer",
                     "description": "Appointment duration in minutes (from list_services)",
                 },
+                "staff_member_id": {
+                    "type": "string",
+                    "description": "Connection ID of the staff member to book with (from list_staff or slot data). Required when multiple staff are available.",
+                },
                 "cancel_booking_id": {
                     "type": "string",
                     "description": "For reschedules only: the ID of the old booking to cancel (from lookup_booking)",
@@ -145,6 +168,27 @@ async def _execute_tool(
 ) -> dict[str, Any]:
     """Run a single tool call and return its result for Claude."""
     try:
+        if tool_name == "list_staff":
+            result = await db.execute(
+                select(CalendarConnection).where(
+                    CalendarConnection.workspace_id == workspace.id,
+                    CalendarConnection.active.is_(True),
+                ).order_by(CalendarConnection.staff_name.nullslast(), CalendarConnection.created_at)
+            )
+            connections = result.scalars().all()
+            if len(connections) <= 1:
+                return {"staff": [], "note": "Single calendar — no staff selection needed."}
+            return {
+                "staff": [
+                    {
+                        "staff_member_id": c.id,
+                        "name": c.staff_name or c.account_email or f"{c.provider} calendar",
+                        "provider": c.provider,
+                    }
+                    for c in connections
+                ]
+            }
+
         if tool_name == "list_services":
             provider = await get_provider_for_workspace(workspace, db)
             if not provider:
@@ -166,6 +210,7 @@ async def _execute_tool(
 
         if tool_name == "find_available_slots":
             service_id = tool_input["service_id"]
+            staff_member_id = tool_input.get("staff_member_id")
             start_raw = tool_input.get("start_date")
             days_ahead = tool_input.get("days_ahead", 7)
 
@@ -180,31 +225,12 @@ async def _execute_tool(
 
             end = start + timedelta(days=days_ahead)
 
-            provider = await get_provider_for_workspace(workspace, db)
-            if not provider:
-                return {"error": "No calendar connected for this workspace."}
-
-            slots = await provider.find_available_slots(service_id, start, end, max_slots=10)
-
-            # Extra safety: strip any slots within 24h (provider may not enforce this)
-            slots = [s for s in slots if s.start >= min_start]
-
-            if not slots:
-                return {
-                    "slots": [],
-                    "note": (
-                        f"No openings found in the next {days_ahead} days "
-                        f"(minimum 24h advance notice required). Try a wider range."
-                    ),
-                }
-
-            # Convert slot times to the user's local timezone so Claude
-            # presents them correctly without needing to do any conversion.
+            # Timezone formatter
             tz_obj = None
             tz_label = "UTC"
             if user_timezone:
                 try:
-                    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+                    from zoneinfo import ZoneInfo
                     tz_obj = ZoneInfo(user_timezone)
                     tz_label = user_timezone
                 except Exception:
@@ -214,17 +240,86 @@ async def _execute_tool(
                 local = dt.astimezone(tz_obj) if tz_obj else dt
                 return local.strftime("%A, %B %d at %I:%M %p") + f" ({tz_label})"
 
-            return {
-                "timezone": tz_label,
-                "slots": [
-                    {
-                        "display_time": _fmt_slot(s.start),
-                        "start_time": s.start.isoformat(),
-                        "end_time": s.end.isoformat(),
+            if staff_member_id:
+                # Single staff member requested
+                provider = await get_provider_by_connection_id(staff_member_id, db)
+                if not provider:
+                    return {"error": f"Staff member {staff_member_id} not found or disconnected."}
+                slots = await provider.find_available_slots(service_id, start, end, max_slots=10)
+                slots = [s for s in slots if s.start >= min_start]
+
+                # Look up the staff name for display
+                conn_result = await db.execute(
+                    select(CalendarConnection).where(CalendarConnection.id == staff_member_id)
+                )
+                conn = conn_result.scalar_one_or_none()
+                staff_label = (conn.staff_name or conn.account_email) if conn else None
+
+                if not slots:
+                    return {
+                        "slots": [],
+                        "note": (
+                            f"No openings found in the next {days_ahead} days "
+                            f"(minimum 24h advance notice required). Try a wider range."
+                        ),
                     }
-                    for s in slots
-                ]
-            }
+                return {
+                    "timezone": tz_label,
+                    "slots": [
+                        {
+                            "display_time": _fmt_slot(s.start),
+                            "start_time": s.start.isoformat(),
+                            "end_time": s.end.isoformat(),
+                            "staff_name": staff_label,
+                            "staff_member_id": staff_member_id,
+                        }
+                        for s in slots
+                    ],
+                }
+            else:
+                # Multi-staff or single provider — aggregate across all connections
+                all_providers = await get_all_providers_for_workspace(workspace, db)
+                if not all_providers:
+                    return {"error": "No calendar connected for this workspace."}
+
+                combined = []
+                for conn, provider in all_providers:
+                    try:
+                        slots = await provider.find_available_slots(
+                            service_id, start, end, max_slots=5
+                        )
+                        slots = [s for s in slots if s.start >= min_start]
+                        staff_label = conn.staff_name or conn.account_email or f"{conn.provider} calendar"
+                        for s in slots:
+                            combined.append({
+                                "display_time": _fmt_slot(s.start),
+                                "start_time": s.start.isoformat(),
+                                "end_time": s.end.isoformat(),
+                                "staff_name": staff_label if len(all_providers) > 1 else None,
+                                "staff_member_id": conn.id if len(all_providers) > 1 else None,
+                            })
+                    except Exception as e:
+                        logger.warning("Slot fetch failed for connection %s: %s", conn.id, e)
+
+                # Sort by start time, cap at 10
+                combined.sort(key=lambda x: x["start_time"])
+                combined = combined[:10]
+
+                # Remove staff fields if single provider (cleaner output)
+                if len(all_providers) == 1:
+                    for s in combined:
+                        s.pop("staff_name", None)
+                        s.pop("staff_member_id", None)
+
+                if not combined:
+                    return {
+                        "slots": [],
+                        "note": (
+                            f"No openings found in the next {days_ahead} days "
+                            f"(minimum 24h advance notice required). Try a wider range."
+                        ),
+                    }
+                return {"timezone": tz_label, "slots": combined}
 
         if tool_name == "confirm_booking":
             customer_name = tool_input["customer_name"]
@@ -238,6 +333,7 @@ async def _execute_tool(
             scheduled_for_str = tool_input["scheduled_for"]
             duration_minutes = int(tool_input["duration_minutes"])
             cancel_booking_id = tool_input.get("cancel_booking_id")
+            staff_member_id = tool_input.get("staff_member_id")
 
             try:
                 scheduled_for = datetime.fromisoformat(
@@ -260,7 +356,19 @@ async def _execute_tool(
                     await db.delete(old)
                     logger.info("Deleted old booking %s for reschedule", cancel_booking_id)
 
-            provider = await get_provider_for_workspace(workspace, db)
+            # Resolve which staff member / provider to use
+            booking_staff_name = None
+            if staff_member_id:
+                provider = await get_provider_by_connection_id(staff_member_id, db)
+                conn_result = await db.execute(
+                    select(CalendarConnection).where(CalendarConnection.id == staff_member_id)
+                )
+                conn = conn_result.scalar_one_or_none()
+                if conn:
+                    booking_staff_name = conn.staff_name or conn.account_email
+            else:
+                provider = await get_provider_for_workspace(workspace, db)
+
             join_url = None
             conf = None
 
@@ -305,10 +413,12 @@ async def _execute_tool(
                 customer_email=customer_email,
                 customer_phone=customer_phone,
                 event_type_uri=service_id,
-                event_uri=provider_event_id,  # Calendly event URI or Google Calendar event ID
+                event_uri=provider_event_id,
                 service_name=service_name,
                 scheduled_for=scheduled_for,
                 duration_minutes=duration_minutes,
+                staff_name=booking_staff_name,
+                calendar_connection_id=staff_member_id,
             )
             db.add(booking)
             await db.flush()
@@ -406,6 +516,8 @@ async def _execute_tool(
                     "customer_name": booking.customer_name,
                     "customer_email": booking.customer_email,
                     "customer_phone": booking.customer_phone or "",
+                    "staff_name": booking.staff_name or None,
+                    "staff_member_id": booking.calendar_connection_id or None,
                 }
             }
 
